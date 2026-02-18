@@ -41,6 +41,7 @@ extensions.configure<ApplicationExtension>("android") {
     packaging {
         resources {
             excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/DEPENDENCIES"
         }
     }
 }
