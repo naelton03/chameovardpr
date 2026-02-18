@@ -1,6 +1,5 @@
 package com.example.replaycam
 
-import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import com.google.android.gms.auth.api.signin.GoogleSignIn
