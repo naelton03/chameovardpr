@@ -56,10 +56,11 @@ class MainActivity : AppCompatActivity() {
     private val segmentFiles = ArrayDeque<File>()
     private var isContinuousRecording = false
     private var isStopping = false
+    private var recordingStartTime: Long = 0 // Para controle do tempo de gravação
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
+    ) { permissions -> 
         val granted = permissions.values.all { it }
         if (granted) {
             startCamera()
@@ -75,6 +76,7 @@ class MainActivity : AppCompatActivity() {
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
+        // Configuração do contador de tempo
         binding.startButton.setOnClickListener { startContinuousRecording() }
         binding.stopButton.setOnClickListener { stopContinuousRecording() }
         binding.replayButton.setOnClickListener { saveReplayBundle() }
@@ -168,7 +170,24 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.isEnabled = true
         status("Status: gravando continuamente")
 
+        // Iniciar o contador de tempo
+        recordingStartTime = System.currentTimeMillis()
+        mainHandler.post(updateTimerRunnable) // Começa a atualizar o contador
+
         startSegment(capture)
+    }
+
+    private val updateTimerRunnable = object : Runnable {
+        override fun run() {
+            if (isContinuousRecording) {
+                val elapsedTime = System.currentTimeMillis() - recordingStartTime
+                val seconds = (elapsedTime / 1000) % 60
+                val minutes = (elapsedTime / (1000 * 60)) % 60
+                val timeFormatted = String.format("%02d:%02d", minutes, seconds)
+                binding.recordingTimerText.text = timeFormatted
+                mainHandler.postDelayed(this, 1000) // Atualiza a cada 1 segundo
+            }
+        }
     }
 
     private fun startSegment(capture: VideoCapture<Recorder>) {
@@ -236,6 +255,9 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.isEnabled = false
         status("Status: gravação parada")
         clearSegmentCache()
+
+        // Parar o contador
+        mainHandler.removeCallbacks(updateTimerRunnable)
     }
 
     private fun saveReplayBundle() {
@@ -271,7 +293,7 @@ class MainActivity : AppCompatActivity() {
         if (segments.isEmpty()) return false
 
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        
+
         // Aqui aplicamos a rotação ao muxer
         val rotation = windowManager.defaultDisplay.rotation
         val rotationDegrees = when (rotation) {
@@ -397,7 +419,7 @@ class MainActivity : AppCompatActivity() {
                 val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
                     ?: return null
 
-                contentResolver.openOutputStream(uri)?.use { output ->
+                contentResolver.openOutputStream(uri)?.use { output -> 
                     source.inputStream().use { input -> input.copyTo(output) }
                 } ?: return null
 
@@ -409,7 +431,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 if (!dir.exists()) dir.mkdirs()
                 val out = File(dir, displayName)
-                source.inputStream().use { input ->
+                source.inputStream().use { input -> 
                     FileOutputStream(out).use { output -> input.copyTo(output) }
                 }
 
