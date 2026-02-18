@@ -58,4 +58,7 @@ dependencies {
     add("implementation", "androidx.camera:camera-lifecycle:$cameraxVersion")
     add("implementation", "androidx.camera:camera-video:$cameraxVersion")
     add("implementation", "androidx.camera:camera-view:$cameraxVersion")
+    add("implementation", "androidx.media:media:1.6.0")
+
+ 
 }
