@@ -37,6 +37,12 @@ extensions.configure<ApplicationExtension>("android") {
     buildFeatures {
         viewBinding = true
     }
+
+    packaging {
+        resources {
+            excludes += "META-INF/INDEX.LIST"
+        }
+    }
 }
 
 tasks.withType<KotlinCompile>().configureEach {
