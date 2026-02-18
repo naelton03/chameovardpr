@@ -16,6 +16,7 @@ import android.provider.MediaStore
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaMuxer
+import android.view.Surface
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -121,6 +122,18 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             videoCapture = VideoCapture.withOutput(recorder)
+
+            // Obter rotação do dispositivo
+            val rotation = windowManager.defaultDisplay.rotation
+            val rotationDegrees = when (rotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+
+            videoCapture?.targetRotation = rotationDegrees
 
             try {
                 cameraProvider.unbindAll()
