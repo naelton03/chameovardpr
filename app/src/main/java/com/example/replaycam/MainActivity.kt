@@ -1,11 +1,17 @@
 package com.example.replaycam
 
 import android.Manifest
+import android.accounts.Account
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaMetadataRetriever
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,9 +19,9 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
-import android.view.Surface
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
@@ -29,7 +35,14 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.replaycam.databinding.ActivityMainBinding
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.api.services.youtube.YouTubeScopes
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -39,9 +52,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.media.MediaMuxer
-import android.media.MediaCodec
-import android.media.MediaExtractor
 
 class MainActivity : AppCompatActivity() {
 
@@ -51,16 +61,36 @@ class MainActivity : AppCompatActivity() {
     private var activeRecording: Recording? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var displayManager: DisplayManager
+    private var previewDisplayId: Int = -1
     private val segmentDurationMs = 5_000L
     private val maxSegments = 4
     private val segmentFiles = ArrayDeque<File>()
     private var isContinuousRecording = false
     private var isStopping = false
-    private var recordingStartTime: Long = 0 // Para controle do tempo de gravação
+    private var recordingStartTime: Long = 0
+
+    private lateinit var googleSignInClient: GoogleSignInClient
+    private lateinit var youTubeLiveManager: YouTubeLiveManager
+    private var shouldStartLiveWithRecording = false
+    private var activeGoogleAccount: Account? = null
+    private var activeLiveSession: YouTubeLiveManager.LiveSession? = null
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+
+        override fun onDisplayRemoved(displayId: Int) = Unit
+
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == previewDisplayId) {
+                updateCaptureRotation()
+            }
+        }
+    }
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions -> 
+    ) { permissions ->
         val granted = permissions.values.all { it }
         if (granted) {
             startCamera()
@@ -69,20 +99,55 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val googleLoginLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+        val signedInAccount = try {
+            task.getResult(ApiException::class.java)
+        } catch (_: ApiException) {
+            null
+        }
+
+        if (signedInAccount?.account == null) {
+            shouldStartLiveWithRecording = false
+            activeGoogleAccount = null
+            toast("Login Google cancelado. Gravação seguirá sem live")
+            startContinuousRecordingInternal()
+            return@registerForActivityResult
+        }
+
+        activeGoogleAccount = signedInAccount.account
+        startContinuousRecordingInternal()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        displayManager = getSystemService(DisplayManager::class.java)
+        youTubeLiveManager = YouTubeLiveManager(this)
 
-        // Configuração do contador de tempo
-        binding.startButton.setOnClickListener { startContinuousRecording() }
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(
+                com.google.android.gms.common.api.Scope(YouTubeScopes.YOUTUBE)
+            )
+            .build()
+        googleSignInClient = GoogleSignIn.getClient(this, gso)
+
+        binding.startButton.setOnClickListener { askIfShouldStartLive() }
         binding.stopButton.setOnClickListener { stopContinuousRecording() }
         binding.replayButton.setOnClickListener { saveReplayBundle() }
         binding.openFolderButton.setOnClickListener { openVideoFolder() }
         updateVideoPathLabel()
         clearSegmentCache()
+        binding.previewView.post {
+            previewDisplayId = binding.previewView.display?.displayId ?: -1
+            updateCaptureRotation()
+        }
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -124,19 +189,7 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             videoCapture = VideoCapture.withOutput(recorder)
-
-            // Obter rotação do dispositivo
-            val rotation = windowManager.defaultDisplay.rotation
-            val rotationDegrees = when (rotation) {
-                Surface.ROTATION_0 -> 0
-                Surface.ROTATION_90 -> 90
-                Surface.ROTATION_180 -> 180
-                Surface.ROTATION_270 -> 270
-                else -> 0
-            }
-
-            // Aplica a rotação corretamente durante a gravação
-            videoCapture?.targetRotation = rotationDegrees
+            updateCaptureRotation()
 
             try {
                 cameraProvider.unbindAll()
@@ -153,7 +206,39 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun startContinuousRecording() {
+    private fun updateCaptureRotation() {
+        val rotation = binding.previewView.display?.rotation ?: android.view.Surface.ROTATION_0
+        videoCapture?.targetRotation = rotation
+    }
+
+    private fun askIfShouldStartLive() {
+        if (isContinuousRecording) return
+
+        AlertDialog.Builder(this)
+            .setTitle("Iniciar live no YouTube?")
+            .setMessage("Deseja iniciar uma live no YouTube ao começar a gravação?")
+            .setNegativeButton("Não") { _, _ ->
+                shouldStartLiveWithRecording = false
+                startContinuousRecordingInternal()
+            }
+            .setPositiveButton("Sim") { _, _ ->
+                shouldStartLiveWithRecording = true
+                ensureGoogleLoginThenStartRecording()
+            }
+            .show()
+    }
+
+    private fun ensureGoogleLoginThenStartRecording() {
+        val account = GoogleSignIn.getLastSignedInAccount(this)
+        if (account?.account == null) {
+            googleLoginLauncher.launch(googleSignInClient.signInIntent)
+            return
+        }
+        activeGoogleAccount = account.account
+        startContinuousRecordingInternal()
+    }
+
+    private fun startContinuousRecordingInternal() {
         if (isContinuousRecording) return
 
         val capture = videoCapture ?: run {
@@ -161,6 +246,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        updateCaptureRotation()
         clearSegmentCache()
         binding.replayButton.isEnabled = false
         isContinuousRecording = true
@@ -170,11 +256,45 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.isEnabled = true
         status("Status: gravando continuamente")
 
-        // Iniciar o contador de tempo
         recordingStartTime = System.currentTimeMillis()
-        mainHandler.post(updateTimerRunnable) // Começa a atualizar o contador
+        mainHandler.post(updateTimerRunnable)
+
+        if (shouldStartLiveWithRecording) {
+            startYouTubeLiveIfNeeded()
+        }
 
         startSegment(capture)
+    }
+
+    private fun startYouTubeLiveIfNeeded() {
+        val account = activeGoogleAccount ?: GoogleSignIn.getLastSignedInAccount(this)?.account
+
+        if (account == null) {
+            toast("Conta Google inválida. Gravação continuará sem live")
+            shouldStartLiveWithRecording = false
+            return
+        }
+
+        lifecycleScope.launch {
+            val result = youTubeLiveManager.startLive(account)
+            result.onSuccess { session ->
+                activeLiveSession = session
+                status("Status: gravando + live no YouTube")
+            }.onFailure {
+                shouldStartLiveWithRecording = false
+                status("Status: gravando (falha ao iniciar live)")
+                toast("Não foi possível iniciar live no YouTube")
+            }
+        }
+    }
+
+    private fun stopYouTubeLiveIfNeeded() {
+        val session = activeLiveSession ?: return
+        val account = activeGoogleAccount ?: GoogleSignIn.getLastSignedInAccount(this)?.account ?: return
+        lifecycleScope.launch {
+            youTubeLiveManager.stopLive(account, session.broadcastId)
+            activeLiveSession = null
+        }
     }
 
     private val updateTimerRunnable = object : Runnable {
@@ -185,12 +305,13 @@ class MainActivity : AppCompatActivity() {
                 val minutes = (elapsedTime / (1000 * 60)) % 60
                 val timeFormatted = String.format("%02d:%02d", minutes, seconds)
                 binding.recordingTimerText.text = timeFormatted
-                mainHandler.postDelayed(this, 1000) // Atualiza a cada 1 segundo
+                mainHandler.postDelayed(this, 1000)
             }
         }
     }
 
     private fun startSegment(capture: VideoCapture<Recorder>) {
+        updateCaptureRotation()
         val segmentFile = createSegmentFile()
 
         val outputOptions = FileOutputOptions.Builder(segmentFile).build()
@@ -255,8 +376,9 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.isEnabled = false
         status("Status: gravação parada")
         clearSegmentCache()
+        stopYouTubeLiveIfNeeded()
+        shouldStartLiveWithRecording = false
 
-        // Parar o contador
         mainHandler.removeCallbacks(updateTimerRunnable)
     }
 
@@ -293,18 +415,9 @@ class MainActivity : AppCompatActivity() {
         if (segments.isEmpty()) return false
 
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-
-        // Aqui aplicamos a rotação ao muxer
-        val rotation = windowManager.defaultDisplay.rotation
-        val rotationDegrees = when (rotation) {
-            Surface.ROTATION_0 -> 0
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-
-        muxer.setOrientationHint(rotationDegrees)
+        val firstValidSegment = segments.firstOrNull { it.exists() && it.length() > 0L }
+        val firstOrientation = firstValidSegment?.let { readVideoOrientationDegrees(it) } ?: 0
+        muxer.setOrientationHint(firstOrientation)
 
         val bufferSize = 2 * 1024 * 1024
         val buffer = ByteBuffer.allocate(bufferSize)
@@ -408,6 +521,19 @@ class MainActivity : AppCompatActivity() {
         return outputFile.exists() && outputFile.length() > 0
     }
 
+    private fun readVideoOrientationDegrees(videoFile: File): Int {
+        return try {
+            val retriever = MediaMetadataRetriever()
+            retriever.setDataSource(videoFile.absolutePath)
+            val orientation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull() ?: 0
+            retriever.release()
+            orientation
+        } catch (_: Exception) {
+            0
+        }
+    }
+
     private fun saveVideoToPublicGallery(source: File, displayName: String): Uri? {
         return try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -419,7 +545,7 @@ class MainActivity : AppCompatActivity() {
                 val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
                     ?: return null
 
-                contentResolver.openOutputStream(uri)?.use { output -> 
+                contentResolver.openOutputStream(uri)?.use { output ->
                     source.inputStream().use { input -> input.copyTo(output) }
                 } ?: return null
 
@@ -431,7 +557,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 if (!dir.exists()) dir.mkdirs()
                 val out = File(dir, displayName)
-                source.inputStream().use { input -> 
+                source.inputStream().use { input ->
                     FileOutputStream(out).use { output -> input.copyTo(output) }
                 }
 
@@ -491,11 +617,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun getOutputDirectory(): File {
-        val movieDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-        return movieDir ?: filesDir
-    }
-
     private fun getPublicReplayPathLabel(): String {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             "Movies/ReplayCam (Galeria)"
@@ -519,8 +640,19 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
     }
 
+    override fun onStart() {
+        super.onStart()
+        displayManager.registerDisplayListener(displayListener, mainHandler)
+    }
+
+    override fun onStop() {
+        displayManager.unregisterDisplayListener(displayListener)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
         clearSegmentCache()
         cameraExecutor.shutdown()
     }
