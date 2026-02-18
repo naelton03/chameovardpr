@@ -51,9 +51,5 @@ dependencies {
     add("implementation", "com.google.android.material:material:1.12.0")
     add("implementation", "androidx.constraintlayout:constraintlayout:2.1.4")
     add("implementation", "androidx.lifecycle:lifecycle-service:2.8.4")
-
-    val rootEncoderVersion = "v2.3.9"
-    add("implementation", "com.github.pedroSG94.RootEncoder:rtmp:$rootEncoderVersion")
-    add("implementation", "com.github.pedroSG94.RootEncoder:rtplibrary:$rootEncoderVersion")
-    add("implementation", "com.github.pedroSG94.RootEncoder:encoder:$rootEncoderVersion")
+    add("implementation", "com.github.pedroSG94.RootEncoder:library:2.5.9")
 }
