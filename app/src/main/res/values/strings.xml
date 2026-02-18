@@ -3,10 +3,9 @@
     <string name="start_live">Começar gravação contínua</string>
     <string name="stop_live">Parar gravação</string>
     <string name="save_replay">Salvar replay (20s)</string>
-    <string name="open_video_folder">Abrir pasta dos vídeos</string>
-    <string name="video_path">Raiz dos vídeos: %1$s
-Replays salvos em: %2$s</string>
-    <string name="video_folder_open_error">Não foi possível abrir a pasta. Caminho copiado.</string>
+    <string name="open_video_folder">Abrir galeria</string>
+    <string name="video_path">Replays salvos em: %1$s</string>
+    <string name="video_folder_open_error">Não foi possível abrir a galeria. Caminho copiado.</string>
     <string name="video_path_copied">Caminho copiado: %1$s</string>
     <string name="status_idle">Status: pronto</string>
 </resources>

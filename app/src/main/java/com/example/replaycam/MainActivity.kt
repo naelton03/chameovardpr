@@ -3,6 +3,7 @@ package com.example.replaycam
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -11,6 +12,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -26,9 +28,9 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
-import androidx.core.content.FileProvider
 import com.example.replaycam.databinding.ActivityMainBinding
 import java.io.File
+import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
@@ -57,7 +59,7 @@ class MainActivity : AppCompatActivity() {
         if (granted) {
             startCamera()
         } else {
-            toast("Permissões de câmera e áudio são obrigatórias")
+            toast("Permissões obrigatórias não concedidas")
         }
     }
 
@@ -88,11 +90,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requiredPermissions(): Array<String> {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-        } else {
-            arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        val base = mutableListOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            base.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
         }
+        return base.toTypedArray()
     }
 
     private fun startCamera() {
@@ -131,9 +133,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startContinuousRecording() {
-        if (isContinuousRecording) {
-            return
-        }
+        if (isContinuousRecording) return
 
         val capture = videoCapture ?: run {
             toast("Câmera não inicializada")
@@ -203,9 +203,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopContinuousRecording() {
-        if (!isContinuousRecording) {
-            return
-        }
+        if (!isContinuousRecording) return
 
         isStopping = true
         isContinuousRecording = false
@@ -224,54 +222,82 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val replayDir = getReplayDirectory()
-        if (!replayDir.exists()) {
-            replayDir.mkdirs()
-        }
-
         val stamp = timestamp()
-        val replaySetDir = File(replayDir, "replay_$stamp")
-        replaySetDir.mkdirs()
+        var savedCount = 0
 
         segmentFiles.forEachIndexed { index, segment ->
-            val out = File(replaySetDir, "part_${index + 1}.mp4")
-            segment.copyTo(out, overwrite = true)
+            val name = "replay_${stamp}_part_${index + 1}.mp4"
+            val savedUri = saveVideoToPublicGallery(segment, name)
+            if (savedUri != null) savedCount++
         }
 
-        status("Status: replay salvo em ${replaySetDir.name}")
-        toast("Replay salvo: ${replaySetDir.absolutePath}")
+        if (savedCount == 0) {
+            status("Erro ao salvar replay na galeria")
+            toast("Falha ao salvar replay na galeria")
+            return
+        }
+
+        status("Status: replay salvo na galeria ($savedCount arquivos)")
+        toast("Replay salvo em ${getPublicReplayPathLabel()}")
     }
 
+    private fun saveVideoToPublicGallery(source: File, displayName: String): Uri? {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                    put(MediaStore.Video.Media.RELATIVE_PATH, "${Environment.DIRECTORY_MOVIES}/ReplayCam")
+                }
+                val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: return null
+
+                contentResolver.openOutputStream(uri)?.use { output ->
+                    source.inputStream().use { input -> input.copyTo(output) }
+                } ?: return null
+
+                uri
+            } else {
+                val dir = File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                    "ReplayCam"
+                )
+                if (!dir.exists()) dir.mkdirs()
+                val out = File(dir, displayName)
+                source.inputStream().use { input ->
+                    FileOutputStream(out).use { output -> input.copyTo(output) }
+                }
+
+                val values = ContentValues().apply {
+                    put(MediaStore.Video.Media.DATA, out.absolutePath)
+                    put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+                }
+                contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     private fun updateVideoPathLabel() {
-        val rootPath = getOutputDirectory().absolutePath
-        val replayPath = getReplayDirectory().absolutePath
         binding.videoPathText.text = getString(
             R.string.video_path,
-            rootPath,
-            replayPath
+            getPublicReplayPathLabel()
         )
     }
 
     private fun openVideoFolder() {
-        val replayDir = getReplayDirectory().apply { mkdirs() }
-        val uri = FileProvider.getUriForFile(
-            this,
-            "${applicationContext.packageName}.fileprovider",
-            replayDir
-        )
-
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "*/*")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, "video/*")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
 
-        if (viewIntent.resolveActivity(packageManager) != null) {
-            startActivity(viewIntent)
+        if (intent.resolveActivity(packageManager) != null) {
+            startActivity(intent)
             return
         }
 
-        val path = replayDir.absolutePath
+        val path = getPublicReplayPathLabel()
         val clipboard = getSystemService(ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText("video_path", path))
         toast(getString(R.string.video_folder_open_error))
@@ -280,19 +306,26 @@ class MainActivity : AppCompatActivity() {
 
     private fun createSegmentFile(): File {
         val segmentsDir = getSegmentsDirectory()
-        if (!segmentsDir.exists()) {
-            segmentsDir.mkdirs()
-        }
+        if (!segmentsDir.exists()) segmentsDir.mkdirs()
         return File(segmentsDir, "segment_${timestamp()}.mp4")
     }
 
     private fun getSegmentsDirectory(): File = File(getOutputDirectory(), "segments")
 
-    private fun getReplayDirectory(): File = File(getOutputDirectory(), "replays")
-
     private fun getOutputDirectory(): File {
         val movieDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
         return movieDir ?: filesDir
+    }
+
+    private fun getPublicReplayPathLabel(): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            "Movies/ReplayCam (Galeria)"
+        } else {
+            File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                "ReplayCam"
+            ).absolutePath
+        }
     }
 
     private fun timestamp(): String {
