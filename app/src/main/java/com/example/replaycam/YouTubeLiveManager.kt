@@ -2,7 +2,7 @@ package com.example.replaycam
 
 import android.accounts.Account
 import android.content.Context
-import com.google.api.client.extensions.android.http.AndroidHttp
+import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.HttpRequest
 import com.google.api.client.http.HttpRequestInitializer
@@ -14,7 +14,7 @@ import com.google.api.services.youtube.model.LiveBroadcastContentDetails
 import com.google.api.services.youtube.model.LiveBroadcastSnippet
 import com.google.api.services.youtube.model.LiveBroadcastStatus
 import com.google.api.services.youtube.model.LiveStream
-import com.google.api.services.youtube.model.LiveStreamCdn
+import com.google.api.services.youtube.model.CdnSettings
 import com.google.api.services.youtube.model.LiveStreamSnippet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -51,14 +51,14 @@ class YouTubeLiveManager(private val context: Context) {
             }
 
             val insertedBroadcast = youtube.liveBroadcasts()
-                .insert("snippet,status,contentDetails", broadcast)
+                .insert(listOf("snippet", "status", "contentDetails"), broadcast)
                 .execute()
 
             val stream = LiveStream().apply {
                 snippet = LiveStreamSnippet().apply {
                     title = "ReplayCam Stream ${System.currentTimeMillis()}"
                 }
-                cdn = LiveStreamCdn().apply {
+                cdn = CdnSettings().apply {
                     ingestionType = "rtmp"
                     resolution = "720p"
                     frameRate = "30fps"
@@ -66,11 +66,11 @@ class YouTubeLiveManager(private val context: Context) {
             }
 
             val insertedStream = youtube.liveStreams()
-                .insert("snippet,cdn,status", stream)
+                .insert(listOf("snippet", "cdn", "status"), stream)
                 .execute()
 
             youtube.liveBroadcasts()
-                .bind("id,contentDetails", insertedBroadcast.id)
+                .bind(listOf("id", "contentDetails"), insertedBroadcast.id)
                 .setStreamId(insertedStream.id)
                 .execute()
 
@@ -95,7 +95,7 @@ class YouTubeLiveManager(private val context: Context) {
             require(broadcastId.isNotBlank()) { "broadcastId inválido" }
             val youtube = buildYouTubeService(account)
             youtube.liveBroadcasts()
-                .transition("complete", "id,status", broadcastId)
+                .transition("complete", listOf("id", "status"), broadcastId)
                 .execute()
             Unit
         }
@@ -114,7 +114,7 @@ class YouTubeLiveManager(private val context: Context) {
         }
 
         return YouTube.Builder(
-            AndroidHttp.newCompatibleTransport(),
+            GoogleNetHttpTransport.newTrustedTransport(),
             GsonFactory.getDefaultInstance(),
             requestInitializer
         )
