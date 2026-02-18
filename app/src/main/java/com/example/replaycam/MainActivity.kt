@@ -6,6 +6,9 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,23 +16,13 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
-import android.view.Surface
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.Preview
-import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.video.FileOutputOptions
-import androidx.camera.video.PendingRecording
-import androidx.camera.video.Quality
-import androidx.camera.video.QualitySelector
-import androidx.camera.video.Recorder
-import androidx.camera.video.Recording
-import androidx.camera.video.VideoCapture
-import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import com.example.replaycam.databinding.ActivityMainBinding
+import com.pedro.rtmp.utils.ConnectCheckerRtmp
+import com.pedro.rtplibrary.rtmp.RtmpCamera2
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -37,35 +30,27 @@ import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import android.media.MediaMuxer
-import android.media.MediaCodec
-import android.media.MediaExtractor
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), ConnectCheckerRtmp {
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var cameraExecutor: ExecutorService
-    private var videoCapture: VideoCapture<Recorder>? = null
-    private var activeRecording: Recording? = null
+    private lateinit var rtmpCamera2: RtmpCamera2
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
     private val maxSegments = 4
     private val segmentFiles = ArrayDeque<File>()
+    private var currentSegmentFile: File? = null
     private var isContinuousRecording = false
-    private var isStopping = false
-    private var recordingStartTime: Long = 0 // Para controle do tempo de gravação
+    private var recordingStartTime: Long = 0L
 
-    private val requestPermissions = registerForActivityResult(
+    private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions -> 
-        val granted = permissions.values.all { it }
-        if (granted) {
-            startCamera()
+    ) { grants ->
+        if (grants.values.all { it }) {
+            startPreview()
         } else {
-            toast("Permissões obrigatórias não concedidas")
+            toast(getString(R.string.permission_denied))
         }
     }
 
@@ -74,190 +59,137 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        cameraExecutor = Executors.newSingleThreadExecutor()
+        rtmpCamera2 = RtmpCamera2(binding.openGlView, this)
 
-        // Configuração do contador de tempo
+        binding.toggleStreamButton.setOnClickListener { toggleStream() }
         binding.startButton.setOnClickListener { startContinuousRecording() }
         binding.stopButton.setOnClickListener { stopContinuousRecording() }
         binding.replayButton.setOnClickListener { saveReplayBundle() }
         binding.openFolderButton.setOnClickListener { openVideoFolder() }
+
         updateVideoPathLabel()
         clearSegmentCache()
 
-        if (allPermissionsGranted()) {
-            startCamera()
+        if (hasCapturePermissions()) {
+            startPreview()
         } else {
-            requestPermissions.launch(requiredPermissions())
+            permissionLauncher.launch(requiredPermissions())
         }
     }
 
-    private fun allPermissionsGranted(): Boolean {
-        return requiredPermissions().all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    private fun toggleStream() {
+        if (rtmpCamera2.isStreaming) {
+            rtmpCamera2.stopStream()
+            stopStreamingService()
+            binding.toggleStreamButton.setText(R.string.start_stream)
+            binding.statusText.setText(R.string.status_disconnected)
+            return
         }
-    }
 
-    private fun requiredPermissions(): Array<String> {
-        val base = mutableListOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
-            base.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        val streamUrl = binding.streamUrlEditText.text?.toString()?.trim().orEmpty()
+        if (!(streamUrl.startsWith("rtmp://") || streamUrl.startsWith("rtmps://"))) {
+            binding.streamUrlLayout.error = getString(R.string.stream_url_required)
+            return
         }
-        return base.toTypedArray()
-    }
 
-    private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        binding.streamUrlLayout.error = null
+        startPreview()
 
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
+        if (!prepareEncodersIfNeeded()) {
+            toast("Falha ao preparar encoders H.264/AAC")
+            return
+        }
 
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.previewView.surfaceProvider)
-            }
-
-            val qualitySelector = QualitySelector.fromOrderedList(
-                listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)
-            )
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(qualitySelector)
-                .build()
-
-            videoCapture = VideoCapture.withOutput(recorder)
-
-            // Obter rotação do dispositivo
-            val rotation = windowManager.defaultDisplay.rotation
-            val rotationDegrees = when (rotation) {
-                Surface.ROTATION_0 -> 0
-                Surface.ROTATION_90 -> 90
-                Surface.ROTATION_180 -> 180
-                Surface.ROTATION_270 -> 270
-                else -> 0
-            }
-
-            // Aplica a rotação corretamente durante a gravação
-            videoCapture?.targetRotation = rotationDegrees
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    videoCapture
-                )
-                status("Status: câmera pronta")
-            } catch (exc: Exception) {
-                status("Erro ao abrir câmera: ${exc.message}")
-            }
-        }, ContextCompat.getMainExecutor(this))
+        startStreamingService()
+        binding.statusText.setText(R.string.status_connecting)
+        rtmpCamera2.startStream(streamUrl)
+        binding.toggleStreamButton.setText(R.string.stop_stream)
     }
 
     private fun startContinuousRecording() {
         if (isContinuousRecording) return
 
-        val capture = videoCapture ?: run {
-            toast("Câmera não inicializada")
+        startPreview()
+        if (!prepareEncodersIfNeeded()) {
+            toast("Falha ao preparar encoders H.264/AAC")
             return
         }
 
         clearSegmentCache()
-        binding.replayButton.isEnabled = false
         isContinuousRecording = true
-        isStopping = false
         binding.startButton.isEnabled = false
         binding.stopButton.isEnabled = true
         binding.replayButton.isEnabled = true
-        status("Status: gravando continuamente")
+        binding.statusText.text = "Status: gravando continuamente"
 
-        // Iniciar o contador de tempo
         recordingStartTime = System.currentTimeMillis()
-        mainHandler.post(updateTimerRunnable) // Começa a atualizar o contador
+        mainHandler.post(updateTimerRunnable)
 
-        startSegment(capture)
+        startSegmentLoop()
     }
 
-    private val updateTimerRunnable = object : Runnable {
-        override fun run() {
-            if (isContinuousRecording) {
-                val elapsedTime = System.currentTimeMillis() - recordingStartTime
-                val seconds = (elapsedTime / 1000) % 60
-                val minutes = (elapsedTime / (1000 * 60)) % 60
-                val timeFormatted = String.format("%02d:%02d", minutes, seconds)
-                binding.recordingTimerText.text = timeFormatted
-                mainHandler.postDelayed(this, 1000) // Atualiza a cada 1 segundo
-            }
-        }
-    }
+    private fun startSegmentLoop() {
+        if (!isContinuousRecording) return
 
-    private fun startSegment(capture: VideoCapture<Recorder>) {
         val segmentFile = createSegmentFile()
+        currentSegmentFile = segmentFile
 
-        val outputOptions = FileOutputOptions.Builder(segmentFile).build()
-        var pendingRecording: PendingRecording = capture.output.prepareRecording(this, outputOptions)
-        if (ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECORD_AUDIO
-            ) == PackageManager.PERMISSION_GRANTED
-        ) {
-            pendingRecording = pendingRecording.withAudioEnabled()
-        }
-
-        activeRecording = pendingRecording.start(ContextCompat.getMainExecutor(this)) { event ->
-            if (event is VideoRecordEvent.Finalize) {
-                if (event.hasError()) {
-                    status("Erro no segmento: ${event.error}")
-                    segmentFile.delete()
-                } else {
-                    onSegmentSaved(segmentFile, event.outputResults.outputUri)
-                }
-
-                if (isContinuousRecording && !isStopping) {
-                    startSegment(capture)
-                }
-            }
+        try {
+            rtmpCamera2.startRecord(segmentFile.absolutePath)
+        } catch (error: Exception) {
+            binding.statusText.text = "Erro ao iniciar segmento: ${error.message}"
+            stopContinuousRecording()
+            return
         }
 
         mainHandler.postDelayed({
-            if (isContinuousRecording && !isStopping) {
-                activeRecording?.stop()
+            finalizeCurrentSegment()
+            if (isContinuousRecording) {
+                startSegmentLoop()
             }
         }, segmentDurationMs)
     }
 
-    private fun onSegmentSaved(file: File, uri: Uri) {
-        val hasValidFile = file.exists() && file.length() > 0
-        val hasValidUri = uri != Uri.EMPTY
+    private fun finalizeCurrentSegment() {
+        val segmentFile = currentSegmentFile ?: return
+        currentSegmentFile = null
 
-        if (!hasValidFile && !hasValidUri) {
-            status("Segmento inválido, descartado")
+        if (rtmpCamera2.isRecording) {
+            try {
+                rtmpCamera2.stopRecord()
+            } catch (_: Exception) {
+            }
+        }
+
+        val valid = segmentFile.exists() && segmentFile.length() > 0
+        if (!valid) {
+            segmentFile.delete()
             return
         }
 
-        segmentFiles.addLast(file)
+        segmentFiles.addLast(segmentFile)
         while (segmentFiles.size > maxSegments) {
             val removed = segmentFiles.removeFirst()
             removed.delete()
         }
-        status("Status: buffer ativo (${segmentFiles.size * 5}s)")
+        binding.statusText.text = "Status: buffer ativo (${segmentFiles.size * 5}s)"
     }
 
     private fun stopContinuousRecording() {
         if (!isContinuousRecording) return
 
-        isStopping = true
         isContinuousRecording = false
-        activeRecording?.stop()
-        activeRecording = null
+        mainHandler.removeCallbacks(updateTimerRunnable)
+        binding.recordingTimerText.text = "00:00"
+
+        finalizeCurrentSegment()
 
         binding.startButton.isEnabled = true
         binding.stopButton.isEnabled = false
         binding.replayButton.isEnabled = false
-        status("Status: gravação parada")
-        clearSegmentCache()
+        binding.statusText.text = "Status: gravação parada"
 
-        // Parar o contador
-        mainHandler.removeCallbacks(updateTimerRunnable)
+        clearSegmentCache()
     }
 
     private fun saveReplayBundle() {
@@ -270,7 +202,7 @@ class MainActivity : AppCompatActivity() {
         val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
         val merged = mergeSegmentsIntoSingleVideo(segmentFiles.toList(), mergedReplay)
         if (!merged) {
-            status("Erro ao montar replay único")
+            binding.statusText.text = "Erro ao montar replay único"
             toast("Falha ao montar replay de 20s")
             return
         }
@@ -280,34 +212,123 @@ class MainActivity : AppCompatActivity() {
         mergedReplay.delete()
 
         if (savedUri == null) {
-            status("Erro ao salvar replay na galeria")
+            binding.statusText.text = "Erro ao salvar replay na galeria"
             toast("Falha ao salvar replay na galeria")
             return
         }
 
-        status("Status: replay único salvo na galeria")
+        binding.statusText.text = "Status: replay único salvo na galeria"
         toast("Replay salvo em ${getPublicReplayPathLabel()}")
+    }
+
+    private fun prepareEncodersIfNeeded(): Boolean {
+        if (rtmpCamera2.isStreaming || rtmpCamera2.isRecording) return true
+        val videoPrepared = rtmpCamera2.prepareVideo(1280, 720, 30, 2_500_000)
+        val audioPrepared = rtmpCamera2.prepareAudio(128_000, 44_100, true, false, false)
+        return videoPrepared && audioPrepared
+    }
+
+    private fun startPreview() {
+        if (!hasCapturePermissions()) return
+        if (!rtmpCamera2.isOnPreview) {
+            rtmpCamera2.startPreview()
+        }
+    }
+
+    private fun hasCapturePermissions(): Boolean {
+        return requiredPermissions().all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requiredPermissions(): Array<String> {
+        val permissions = mutableListOf(
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+        )
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P) {
+            permissions.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        return permissions.toTypedArray()
+    }
+
+    private val updateTimerRunnable = object : Runnable {
+        override fun run() {
+            if (!isContinuousRecording) return
+            val elapsedTime = System.currentTimeMillis() - recordingStartTime
+            val seconds = (elapsedTime / 1000) % 60
+            val minutes = (elapsedTime / (1000 * 60)) % 60
+            binding.recordingTimerText.text = String.format(Locale.US, "%02d:%02d", minutes, seconds)
+            mainHandler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun startStreamingService() {
+        val intent = Intent(this, StreamingService::class.java).apply {
+            action = StreamingService.ACTION_START
+        }
+        ContextCompat.startForegroundService(this, intent)
+    }
+
+    private fun stopStreamingService() {
+        val intent = Intent(this, StreamingService::class.java).apply {
+            action = StreamingService.ACTION_STOP
+        }
+        startService(intent)
+    }
+
+    override fun onConnectionStartedRtmp(rtmpUrl: String) {
+        runOnUiThread {
+            binding.statusText.setText(R.string.status_connecting)
+        }
+    }
+
+    override fun onConnectionSuccessRtmp() {
+        runOnUiThread {
+            binding.statusText.setText(R.string.stream_connected)
+        }
+    }
+
+    override fun onConnectionFailedRtmp(reason: String) {
+        runOnUiThread {
+            binding.statusText.text = getString(R.string.stream_connection_failed) + ": $reason"
+            binding.toggleStreamButton.setText(R.string.start_stream)
+            if (rtmpCamera2.isStreaming) rtmpCamera2.stopStream()
+            stopStreamingService()
+        }
+    }
+
+    override fun onNewBitrateRtmp(bitrate: Long) = Unit
+
+    override fun onDisconnectRtmp() {
+        runOnUiThread {
+            binding.statusText.setText(R.string.status_disconnected)
+            binding.toggleStreamButton.setText(R.string.start_stream)
+            stopStreamingService()
+        }
+    }
+
+    override fun onAuthErrorRtmp() {
+        runOnUiThread {
+            binding.statusText.setText(R.string.stream_auth_error)
+            toast(getString(R.string.stream_auth_error))
+        }
+    }
+
+    override fun onAuthSuccessRtmp() {
+        runOnUiThread {
+            binding.statusText.setText(R.string.stream_auth_success)
+        }
     }
 
     private fun mergeSegmentsIntoSingleVideo(segments: List<File>, outputFile: File): Boolean {
         if (segments.isEmpty()) return false
 
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-
-        // Aqui aplicamos a rotação ao muxer
-        val rotation = windowManager.defaultDisplay.rotation
-        val rotationDegrees = when (rotation) {
-            Surface.ROTATION_0 -> 0
-            Surface.ROTATION_90 -> 90
-            Surface.ROTATION_180 -> 180
-            Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-
-        muxer.setOrientationHint(rotationDegrees)
-
-        val bufferSize = 2 * 1024 * 1024
-        val buffer = ByteBuffer.allocate(bufferSize)
+        val buffer = ByteBuffer.allocate(2 * 1024 * 1024)
         val videoInfo = MediaCodec.BufferInfo()
         val audioInfo = MediaCodec.BufferInfo()
 
@@ -318,8 +339,8 @@ class MainActivity : AppCompatActivity() {
         var audioPtsOffset = 0L
 
         try {
-            for (segment in segments) {
-                if (!segment.exists() || segment.length() == 0L) continue
+            segments.forEach { segment ->
+                if (!segment.exists() || segment.length() == 0L) return@forEach
 
                 val extractor = MediaExtractor()
                 extractor.setDataSource(segment.absolutePath)
@@ -328,28 +349,21 @@ class MainActivity : AppCompatActivity() {
                 var srcAudioTrack = -1
                 for (i in 0 until extractor.trackCount) {
                     val format = extractor.getTrackFormat(i)
-                    val mime = format.getString("mime") ?: continue
-                    if (mime.startsWith("video/")) {
-                        srcVideoTrack = i
-                        if (videoTrackIndex == -1) {
-                            videoTrackIndex = muxer.addTrack(format)
-                        }
-                    } else if (mime.startsWith("audio/")) {
-                        srcAudioTrack = i
-                        if (audioTrackIndex == -1) {
-                            audioTrackIndex = muxer.addTrack(format)
-                        }
-                    }
+                    val mime = format.getString(MediaFormatKeys.MIME).orEmpty()
+                    if (mime.startsWith("video/")) srcVideoTrack = i
+                    if (mime.startsWith("audio/")) srcAudioTrack = i
+                }
+
+                if (srcVideoTrack != -1 && videoTrackIndex == -1) {
+                    videoTrackIndex = muxer.addTrack(extractor.getTrackFormat(srcVideoTrack))
+                }
+                if (srcAudioTrack != -1 && audioTrackIndex == -1) {
+                    audioTrackIndex = muxer.addTrack(extractor.getTrackFormat(srcAudioTrack))
                 }
 
                 if (!started && (videoTrackIndex != -1 || audioTrackIndex != -1)) {
                     muxer.start()
                     started = true
-                }
-
-                if (!started) {
-                    extractor.release()
-                    continue
                 }
 
                 if (srcVideoTrack != -1 && videoTrackIndex != -1) {
@@ -358,7 +372,6 @@ class MainActivity : AppCompatActivity() {
                     while (true) {
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
-
                         videoInfo.offset = 0
                         videoInfo.size = sampleSize
                         videoInfo.presentationTimeUs = videoPtsOffset + extractor.sampleTime
@@ -377,7 +390,6 @@ class MainActivity : AppCompatActivity() {
                     while (true) {
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
-
                         audioInfo.offset = 0
                         audioInfo.size = sampleSize
                         audioInfo.presentationTimeUs = audioPtsOffset + extractor.sampleTime
@@ -419,7 +431,7 @@ class MainActivity : AppCompatActivity() {
                 val uri = contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
                     ?: return null
 
-                contentResolver.openOutputStream(uri)?.use { output -> 
+                contentResolver.openOutputStream(uri)?.use { output ->
                     source.inputStream().use { input -> input.copyTo(output) }
                 } ?: return null
 
@@ -431,7 +443,7 @@ class MainActivity : AppCompatActivity() {
                 )
                 if (!dir.exists()) dir.mkdirs()
                 val out = File(dir, displayName)
-                source.inputStream().use { input -> 
+                source.inputStream().use { input ->
                     FileOutputStream(out).use { output -> input.copyTo(output) }
                 }
 
@@ -447,10 +459,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateVideoPathLabel() {
-        binding.videoPathText.text = getString(
-            R.string.video_path,
-            getPublicReplayPathLabel()
-        )
+        binding.videoPathText.text = getString(R.string.video_path, getPublicReplayPathLabel())
     }
 
     private fun openVideoFolder() {
@@ -468,7 +477,7 @@ class MainActivity : AppCompatActivity() {
         val clipboard = getSystemService(ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText("video_path", path))
         toast(getString(R.string.video_folder_open_error))
-        status(getString(R.string.video_path_copied, path))
+        binding.statusText.text = getString(R.string.video_path_copied, path)
     }
 
     private fun createSegmentFile(): File {
@@ -480,8 +489,7 @@ class MainActivity : AppCompatActivity() {
     private fun getSegmentsDirectory(): File = File(cacheDir, "replay_segments_cache")
 
     private fun clearSegmentCache() {
-        activeRecording?.close()
-        activeRecording = null
+        currentSegmentFile = null
         segmentFiles.forEach { it.delete() }
         segmentFiles.clear()
 
@@ -489,11 +497,6 @@ class MainActivity : AppCompatActivity() {
         if (dir.exists()) {
             dir.listFiles()?.forEach { it.delete() }
         }
-    }
-
-    private fun getOutputDirectory(): File {
-        val movieDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-        return movieDir ?: filesDir
     }
 
     private fun getPublicReplayPathLabel(): String {
@@ -511,17 +514,30 @@ class MainActivity : AppCompatActivity() {
         return SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
     }
 
-    private fun status(text: String) {
-        binding.statusText.text = text
-    }
-
-    private fun toast(text: String) {
-        Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
-    }
-
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
+        if (rtmpCamera2.isRecording) {
+            try {
+                rtmpCamera2.stopRecord()
+            } catch (_: Exception) {
+            }
+        }
+        if (rtmpCamera2.isStreaming) {
+            rtmpCamera2.stopStream()
+            stopStreamingService()
+        }
+        if (rtmpCamera2.isOnPreview) {
+            rtmpCamera2.stopPreview()
+        }
         clearSegmentCache()
-        cameraExecutor.shutdown()
+    }
+
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
+
+    private object MediaFormatKeys {
+        const val MIME = "mime"
     }
 }
