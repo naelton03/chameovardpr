@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FileWriter
 import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private val maxSegments = 4
     private val segmentFiles = ArrayDeque<File>()
     private val segmentLock = Any()
+    private val diagnosticsLogLock = Any()
     private var isContinuousRecording = false
     private var isStopping = false
 
@@ -81,6 +83,7 @@ class MainActivity : AppCompatActivity() {
             val tempCelsius = tempTenths / 10f
             if (tempCelsius >= 45f) {
                 Log.w(tag, "Thermal throttle triggered temp=$tempCelsius")
+                appendDiagnosticLog("Thermal throttle acionado: ${tempCelsius}C")
                 rtmpStreamEngine?.setBitrateOnFly(1_200_000)
                 toast(getString(R.string.temperature_warning, tempCelsius))
             }
@@ -101,6 +104,7 @@ class MainActivity : AppCompatActivity() {
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK) {
             Log.w(tag, "Google login cancelado pelo usuário")
+            appendDiagnosticLog("Google Sign-In cancelado pelo usuário")
             toast("Login Google cancelado")
             return@registerForActivityResult
         }
@@ -108,6 +112,7 @@ class MainActivity : AppCompatActivity() {
         val account = youtubeLiveHandler.parseSignInResult(result.data)
         if (account == null) {
             Log.e(tag, "Falha ao parsear resultado do Google Sign-In")
+            appendDiagnosticLog("Falha ao parsear resultado do Google Sign-In")
             toast("Falha ao autenticar no Google")
             return@registerForActivityResult
         }
@@ -231,6 +236,7 @@ class MainActivity : AppCompatActivity() {
             withContext(Dispatchers.Main) {
                 updateLiveButtonUi(false)
                 Log.e(tag, "Erro ao iniciar live", error)
+                appendDiagnosticLog("Erro ao iniciar live: ${error.message}", error)
                 status("Erro ao iniciar live: ${error.message}")
             }
         }
@@ -635,6 +641,31 @@ class MainActivity : AppCompatActivity() {
 
     private fun toast(text: String) {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+    }
+
+    private fun appendDiagnosticLog(message: String, error: Throwable? = null) {
+        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+        val logFile = File(getExternalFilesDir(null) ?: filesDir, "replaycam_diagnostics.txt")
+        val stacktrace = error?.stackTraceToString()?.trim().orEmpty()
+        val entry = buildString {
+            append("[")
+            append(timestamp)
+            append("] ")
+            append(message)
+            if (stacktrace.isNotBlank()) {
+                append("\n")
+                append(stacktrace)
+            }
+            append("\n")
+        }
+
+        synchronized(diagnosticsLogLock) {
+            runCatching {
+                FileWriter(logFile, true).use { writer -> writer.append(entry) }
+            }.onFailure { writeError ->
+                Log.e(tag, "Falha ao gravar log em arquivo", writeError)
+            }
+        }
     }
 
     override fun onDestroy() {
