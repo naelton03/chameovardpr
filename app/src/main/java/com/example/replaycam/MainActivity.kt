@@ -250,7 +250,7 @@ class MainActivity : AppCompatActivity() {
         val outputDir = getOutputDirectory()
         val uri = FileProvider.getUriForFile(
             this,
-            "${BuildConfig.APPLICATION_ID}.fileprovider",
+            "${applicationContext.packageName}.fileprovider",
             outputDir
         )
 
