@@ -1,6 +1,9 @@
 package com.example.replaycam
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -23,6 +26,7 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.example.replaycam.databinding.ActivityMainBinding
 import java.io.File
 import java.text.SimpleDateFormat
@@ -67,6 +71,8 @@ class MainActivity : AppCompatActivity() {
         binding.startButton.setOnClickListener { startContinuousRecording() }
         binding.stopButton.setOnClickListener { stopContinuousRecording() }
         binding.replayButton.setOnClickListener { saveReplayBundle() }
+        binding.openFolderButton.setOnClickListener { openVideoFolder() }
+        updateVideoPathLabel()
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -230,6 +236,39 @@ class MainActivity : AppCompatActivity() {
 
         status("Status: replay salvo em ${replaySetDir.name}")
         toast("Replay salvo: ${replaySetDir.absolutePath}")
+    }
+
+
+    private fun updateVideoPathLabel() {
+        binding.videoPathText.text = getString(
+            R.string.video_path,
+            getOutputDirectory().absolutePath
+        )
+    }
+
+    private fun openVideoFolder() {
+        val outputDir = getOutputDirectory()
+        val uri = FileProvider.getUriForFile(
+            this,
+            "${BuildConfig.APPLICATION_ID}.fileprovider",
+            outputDir
+        )
+
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "*/*")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        if (viewIntent.resolveActivity(packageManager) != null) {
+            startActivity(viewIntent)
+            return
+        }
+
+        val path = outputDir.absolutePath
+        val clipboard = getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("video_path", path))
+        toast(getString(R.string.video_folder_open_error))
+        status(getString(R.string.video_path_copied, path))
     }
 
     private fun createSegmentFile(): File {

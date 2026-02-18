@@ -29,9 +29,23 @@
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="12dp"
+            android:layout_marginBottom="8dp"
             android:text="@string/status_idle"
             android:textAppearance="@style/TextAppearance.Material3.BodyMedium" />
+
+        <TextView
+            android:id="@+id/videoPathText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+
+        <Button
+            android:id="@+id/openFolderButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="@string/open_video_folder" />
 
         <Button
             android:id="@+id/startButton"
