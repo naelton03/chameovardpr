@@ -1,11 +1,32 @@
 <resources>
     <string name="app_name">ReplayCam</string>
-    <string name="start_live">Começar gravação contínua</string>
-    <string name="stop_live">Parar gravação</string>
+    <string name="start_live">Gravar / Fazer live</string>
+    <string name="stop_live">Pausar gravação/live</string>
     <string name="save_replay">Salvar replay (20s)</string>
     <string name="open_video_folder">Abrir galeria</string>
     <string name="video_path">Replays salvos em: %1$s</string>
     <string name="video_folder_open_error">Não foi possível abrir a galeria. Caminho copiado.</string>
     <string name="video_path_copied">Caminho copiado: %1$s</string>
-    <string name="status_idle">Status: pronto</string>
+    <string name="status_idle">Status: pronto para gravar ou iniciar live no YouTube</string>
+    <string name="status_opening_youtube">Status: abrindo integração do YouTube para iniciar live</string>
+    <string name="status_back_from_youtube">Status: live iniciada no YouTube, gravação iniciada no app</string>
+    <string name="status_recording_live">Status: gravação + live em andamento</string>
+    <string name="status_recording_only">Status: gravação local em andamento</string>
+    <string name="status_live_stopped">Status: gravação/live pausadas</string>
+    <string name="status_youtube_open_error">Erro ao abrir configurações de live do YouTube</string>
+    <string name="status_youtube_login_needed">Status: faça login Google para integrar com YouTube</string>
+    <string name="status_youtube_login_failed">Erro no login Google para YouTube</string>
+    <string name="status_starting_live_from_app">Status: iniciando live diretamente pelo app</string>
+    <string name="status_no_broadcast_ready">Nenhuma live pronta encontrada no seu canal.</string>
+    <string name="status_broadcast_not_ready">Live não pronta para iniciar (estado: %1$s).</string>
+    <string name="status_start_live_failed">Falha ao iniciar a live pelo app.</string>
+    <string name="youtube_login_hint">Faça login no Google, inicie sua live no YouTube e retorne ao app para continuar o controle.</string>
+    <string name="youtube_open_error">Não foi possível abrir o YouTube Studio no dispositivo.</string>
+    <string name="youtube_login_failed">Não foi possível autenticar sua conta Google para a live.</string>
+    <string name="youtube_pause_hint">Gravação pausada e live encerrada automaticamente pelo app.</string>
+    <string name="youtube_pause_open_error">Não foi possível encerrar a live pelo app.</string>
+    <string name="live_prompt_title">Iniciar gravação</string>
+    <string name="live_prompt_message">Você deseja também iniciar a live?</string>
+    <string name="live_prompt_yes">Sim, iniciar live</string>
+    <string name="live_prompt_no">Não, só gravar</string>
 </resources>

@@ -37,6 +37,22 @@ extensions.configure<ApplicationExtension>("android") {
     buildFeatures {
         viewBinding = true
     }
+
+    packaging {
+        resources {
+            excludes += setOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/license.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt",
+                "META-INF/notice.txt",
+                "META-INF/AL2.0",
+                "META-INF/LGPL2.1"
+            )
+        }
+    }
 }
 
 tasks.withType<KotlinCompile>().configureEach {
@@ -59,6 +75,11 @@ dependencies {
     add("implementation", "androidx.camera:camera-video:$cameraxVersion")
     add("implementation", "androidx.camera:camera-view:$cameraxVersion")
     add("implementation", "androidx.media:media:1.6.0")
+    add("implementation", "com.google.android.gms:play-services-auth:21.2.0")
+    add("implementation", "com.google.apis:google-api-services-youtube:v3-rev20210915-1.32.1")
+    add("implementation", "com.google.http-client:google-http-client-gson:1.42.3")
+    add("implementation", "com.google.http-client:google-http-client-android:1.42.3")
+    add("implementation", "com.google.api-client:google-api-client-android:1.35.2")
 
  
 }
