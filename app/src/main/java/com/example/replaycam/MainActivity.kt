@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.setOnClickListener { saveReplayBundle() }
         binding.openFolderButton.setOnClickListener { openVideoFolder() }
         updateVideoPathLabel()
+        clearSegmentCache()
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -140,6 +141,8 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        clearSegmentCache()
+        binding.replayButton.isEnabled = false
         isContinuousRecording = true
         isStopping = false
         binding.startButton.isEnabled = false
@@ -212,8 +215,9 @@ class MainActivity : AppCompatActivity() {
 
         binding.startButton.isEnabled = true
         binding.stopButton.isEnabled = false
-        binding.replayButton.isEnabled = segmentFiles.isNotEmpty()
+        binding.replayButton.isEnabled = false
         status("Status: gravação parada")
+        clearSegmentCache()
     }
 
     private fun saveReplayBundle() {
@@ -310,7 +314,19 @@ class MainActivity : AppCompatActivity() {
         return File(segmentsDir, "segment_${timestamp()}.mp4")
     }
 
-    private fun getSegmentsDirectory(): File = File(getOutputDirectory(), "segments")
+    private fun getSegmentsDirectory(): File = File(cacheDir, "replay_segments_cache")
+
+    private fun clearSegmentCache() {
+        activeRecording?.close()
+        activeRecording = null
+        segmentFiles.forEach { it.delete() }
+        segmentFiles.clear()
+
+        val dir = getSegmentsDirectory()
+        if (dir.exists()) {
+            dir.listFiles()?.forEach { it.delete() }
+        }
+    }
 
     private fun getOutputDirectory(): File {
         val movieDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
@@ -342,7 +358,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        activeRecording?.close()
+        clearSegmentCache()
         cameraExecutor.shutdown()
     }
 }
