@@ -1,5 +1,20 @@
 <resources>
     <string name="app_name">ReplayCam</string>
+    <string name="stream_url_hint">URL RTMP/RTMPS do YouTube</string>
+    <string name="status_idle">Status: pronto para conectar</string>
+    <string name="start_stream">Iniciar live</string>
+    <string name="stop_stream">Parar live</string>
+    <string name="status_connecting">Status: conectando…</string>
+    <string name="status_disconnected">Status: desconectado</string>
+    <string name="stream_url_required">Informe uma URL RTMP/RTMPS válida</string>
+    <string name="permission_denied">Permissões de câmera e microfone são obrigatórias</string>
+    <string name="stream_connected">Status: conexão estabelecida</string>
+    <string name="stream_connection_failed">Falha ao conectar</string>
+    <string name="stream_auth_error">Erro de autenticação no servidor</string>
+    <string name="stream_auth_success">Autenticação com sucesso</string>
+    <string name="notification_title">ReplayCam ao vivo</string>
+    <string name="notification_text">Streaming em andamento para YouTube</string>
+
     <string name="start_live">Começar gravação contínua</string>
     <string name="stop_live">Parar gravação</string>
     <string name="save_replay">Salvar replay (20s)</string>
@@ -7,5 +22,4 @@
     <string name="video_path">Replays salvos em: %1$s</string>
     <string name="video_folder_open_error">Não foi possível abrir a galeria. Caminho copiado.</string>
     <string name="video_path_copied">Caminho copiado: %1$s</string>
-    <string name="status_idle">Status: pronto</string>
 </resources>

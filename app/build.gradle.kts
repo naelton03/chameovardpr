@@ -11,7 +11,7 @@ extensions.configure<ApplicationExtension>("android") {
 
     defaultConfig {
         applicationId = "com.example.replaycam"
-        minSdk = 28
+        minSdk = 21
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -46,19 +46,14 @@ tasks.withType<KotlinCompile>().configureEach {
 }
 
 dependencies {
-    val cameraxVersion = "1.3.4"
-
     add("implementation", "androidx.core:core-ktx:1.13.1")
     add("implementation", "androidx.appcompat:appcompat:1.7.0")
     add("implementation", "com.google.android.material:material:1.12.0")
     add("implementation", "androidx.constraintlayout:constraintlayout:2.1.4")
+    add("implementation", "androidx.lifecycle:lifecycle-service:2.8.4")
 
-    add("implementation", "androidx.camera:camera-core:$cameraxVersion")
-    add("implementation", "androidx.camera:camera-camera2:$cameraxVersion")
-    add("implementation", "androidx.camera:camera-lifecycle:$cameraxVersion")
-    add("implementation", "androidx.camera:camera-video:$cameraxVersion")
-    add("implementation", "androidx.camera:camera-view:$cameraxVersion")
-    add("implementation", "androidx.media:media:1.6.0")
-
- 
+    val rootEncoderVersion = "2.3.9"
+    add("implementation", "com.github.pedroSG94.RootEncoder:rtmp:$rootEncoderVersion")
+    add("implementation", "com.github.pedroSG94.RootEncoder:rtplibrary:$rootEncoderVersion")
+    add("implementation", "com.github.pedroSG94.RootEncoder:encoder:$rootEncoderVersion")
 }
