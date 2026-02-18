@@ -56,6 +56,8 @@ bash scripts/build_and_install.sh
 
 Nesse modo, se o build local falhar, o script baixa e instala automaticamente o último artifact bem-sucedido (`replaycam-debug-apk`) da pipeline.
 
+Se você não passar `owner/repo`, o script tenta inferir automaticamente a partir do `git remote origin` (GitHub HTTPS/SSH).
+
 ## Pipeline CI (GitHub Actions)
 
 Workflow em `.github/workflows/android-apk.yml`:
