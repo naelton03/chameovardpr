@@ -56,6 +56,8 @@ bash scripts/build_and_install.sh
 
 Nesse modo, se o build local falhar, o script baixa e instala automaticamente o último artifact bem-sucedido (`replaycam-debug-apk`) da pipeline.
 
+Quando o ambiente não consegue acessar repositórios de build (Maven/Google), o script detecta isso e já pula direto para o fallback da CI.
+
 Se você não passar `owner/repo`, o script tenta inferir automaticamente a partir do `git remote origin` (GitHub HTTPS/SSH).
 
 ## Pipeline CI (GitHub Actions)

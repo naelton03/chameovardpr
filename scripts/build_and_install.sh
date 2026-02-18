@@ -27,6 +27,22 @@ infer_repo_slug_from_git_remote() {
   return 1
 }
 
+can_reach_build_repositories() {
+  if ! command -v curl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local url
+  for url in \
+    "https://dl.google.com/dl/android/maven2/" \
+    "https://repo.maven.apache.org/maven2/"; do
+    if ! curl -sSfI --max-time 8 "$url" >/dev/null 2>&1; then
+      return 1
+    fi
+  done
+  return 0
+}
+
 install_local_apk() {
   if [[ ! -f "$APK_PATH" ]]; then
     echo "APK não encontrado em $APK_PATH"
@@ -43,13 +59,16 @@ install_local_apk() {
   echo "Instalação concluída (build local): $APK_PATH"
 }
 
-echo "[ReplayCam] Tentando build local: gradle assembleDebug"
-if gradle assembleDebug; then
-  install_local_apk
-  exit 0
+if can_reach_build_repositories; then
+  echo "[ReplayCam] Tentando build local: gradle assembleDebug"
+  if gradle assembleDebug; then
+    install_local_apk
+    exit 0
+  fi
+  echo "[ReplayCam] Build local falhou."
+else
+  echo "[ReplayCam] Repositórios de build indisponíveis neste ambiente. Pulando build local."
 fi
-
-echo "[ReplayCam] Build local falhou."
 if [[ -z "$REPO_SLUG" ]]; then
   REPO_SLUG="$(infer_repo_slug_from_git_remote || true)"
 fi
