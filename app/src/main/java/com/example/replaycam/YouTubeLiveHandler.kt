@@ -65,22 +65,27 @@ class YouTubeLiveHandler(private val context: Context) {
     fun isAuthenticated(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
 
     suspend fun createLiveSession(account: GoogleSignInAccount): LiveSessionInfo = withContext(Dispatchers.IO) {
-        Log.i(tag, "createLiveSession start for account=${account.email}")
-        val youtube = buildYouTubeService(account)
-        val stream = createLiveStream(youtube)
-        val broadcast = createLiveBroadcast(youtube)
-        bindBroadcastToStream(youtube, broadcast.id, stream.id)
-        Log.i(tag, "createLiveSession done broadcastId=${broadcast.id} streamId=${stream.id}")
+        runCatching {
+            Log.i(tag, "createLiveSession start for account=${account.email}")
+            ErrorFileLogger.logInfo(context, "YOUTUBE_CREATE_LIVE_SESSION", "iniciado para ${account.email}")
+            val youtube = buildYouTubeService(account)
+            val stream = createLiveStream(youtube)
+            val broadcast = createLiveBroadcast(youtube)
+            bindBroadcastToStream(youtube, broadcast.id, stream.id)
+            Log.i(tag, "createLiveSession done broadcastId=${broadcast.id} streamId=${stream.id}")
 
-        val ingestion = stream.cdn?.ingestionInfo
-            ?: error("YouTube retornou stream sem ingestionInfo")
+            val ingestion = stream.cdn?.ingestionInfo
+                ?: error("YouTube retornou stream sem ingestionInfo")
 
-        LiveSessionInfo(
-            broadcastId = broadcast.id,
-            streamId = stream.id,
-            rtmpServerUrl = ingestion.ingestionAddress,
-            streamKey = ingestion.streamName
-        )
+            LiveSessionInfo(
+                broadcastId = broadcast.id,
+                streamId = stream.id,
+                rtmpServerUrl = ingestion.ingestionAddress,
+                streamKey = ingestion.streamName
+            )
+        }.onFailure { error ->
+            ErrorFileLogger.logError(context, "YOUTUBE_CREATE_LIVE_SESSION", error)
+        }.getOrThrow()
     }
 
     private fun buildYouTubeService(account: GoogleSignInAccount): YouTube {

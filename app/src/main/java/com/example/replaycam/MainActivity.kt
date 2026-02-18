@@ -128,16 +128,19 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        ErrorFileLogger.installGlobalHandlers(this)
+        ErrorFileLogger.logInfo(this, "APP_START", "MainActivity criada")
+
         cameraExecutor = Executors.newSingleThreadExecutor()
         youtubeLiveHandler = YouTubeLiveHandler(this)
         rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
         signedAccount = GoogleSignIn.getLastSignedInAccount(this)
 
-        binding.startButton.setOnClickListener { startContinuousRecording() }
-        binding.stopButton.setOnClickListener { stopContinuousRecording() }
-        binding.replayButton.setOnClickListener { saveReplayBundle() }
-        binding.openFolderButton.setOnClickListener { openVideoFolder() }
-        binding.toggleLiveButton.setOnClickListener { handleLiveToggleClick() }
+        binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording() } }
+        binding.stopButton.setOnClickListener { runUiAction("BTN_STOP_RECORDING") { stopContinuousRecording() } }
+        binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
+        binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
+        binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         updateLiveButtonUi(false)
         updateVideoPathLabel()
         clearSegmentCache()
@@ -153,6 +156,7 @@ class MainActivity : AppCompatActivity() {
 
     private val streamCallbacks = object : RtmpStreamEngine.Callbacks {
         override fun onConnected() {
+            ErrorFileLogger.logInfo(this@MainActivity, "LIVE_CONNECTED", "RTMP conectado")
             runOnUiThread {
                 updateLiveButtonUi(true)
                 status("Status: live conectada")
@@ -160,6 +164,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onDisconnected() {
+            ErrorFileLogger.logInfo(this@MainActivity, "LIVE_DISCONNECTED", "RTMP desconectado")
             runOnUiThread {
                 updateLiveButtonUi(false)
                 status("Status: live desconectada")
@@ -167,6 +172,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onConnectionFailed(reason: String) {
+            ErrorFileLogger.logError(this@MainActivity, "LIVE_CONNECTION_FAILED", IllegalStateException(reason))
             runOnUiThread {
                 updateLiveButtonUi(false)
                 status("Live falhou: $reason")
@@ -174,15 +180,30 @@ class MainActivity : AppCompatActivity() {
         }
 
         override fun onAuthError() {
+            ErrorFileLogger.logError(this@MainActivity, "LIVE_AUTH_ERROR", IllegalStateException("Erro de autenticação RTMP"))
             runOnUiThread { toast("Erro de autenticação RTMP") }
         }
 
         override fun onAuthSuccess() {
+            ErrorFileLogger.logInfo(this@MainActivity, "LIVE_AUTH_SUCCESS", "Autenticação RTMP OK")
             runOnUiThread { toast("Autenticação RTMP OK") }
         }
 
         override fun onRetrying(delayMs: Long, reason: String) {
+            ErrorFileLogger.logInfo(this@MainActivity, "LIVE_RETRYING", "delay=${delayMs}ms reason=$reason")
             runOnUiThread { status("Reconectando live em ${delayMs}ms ($reason)") }
+        }
+    }
+
+    private fun runUiAction(action: String, block: () -> Unit) {
+        runCatching {
+            ErrorFileLogger.logInfo(this, action, "ação iniciada")
+            block()
+        }.onFailure { error ->
+            ErrorFileLogger.logError(this, action, error)
+            appendDiagnosticLog("Falha na ação $action: ${error.message}", error)
+            status("Erro na ação $action: ${error.message}")
+            toast("Erro na ação: $action")
         }
     }
 
@@ -296,6 +317,8 @@ class MainActivity : AppCompatActivity() {
                 )
                 status("Status: câmera pronta")
             } catch (exc: Exception) {
+                ErrorFileLogger.logError(this, "START_CAMERA", exc)
+                appendDiagnosticLog("Erro ao abrir câmera: ${exc.message}", exc)
                 status("Erro ao abrir câmera: ${exc.message}")
             }
         }, ContextCompat.getMainExecutor(this))
@@ -337,6 +360,9 @@ class MainActivity : AppCompatActivity() {
         activeRecording = pendingRecording.start(ContextCompat.getMainExecutor(this)) { event ->
             if (event is VideoRecordEvent.Finalize) {
                 if (event.hasError()) {
+                    val segmentError = IllegalStateException("Finalize error code=${event.error}")
+                    ErrorFileLogger.logError(this, "RECORD_SEGMENT_FINALIZE", segmentError)
+                    appendDiagnosticLog("Erro no segmento: ${event.error}", segmentError)
                     status("Erro no segmento: ${event.error}")
                     segmentFile.delete()
                 } else {
@@ -519,7 +545,9 @@ class MainActivity : AppCompatActivity() {
 
                 extractor.release()
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            ErrorFileLogger.logError(this, "MERGE_SEGMENTS", error)
+            appendDiagnosticLog("Erro ao juntar segmentos: ${error.message}", error)
             return false
         } finally {
             try {
@@ -568,7 +596,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values)
             }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            ErrorFileLogger.logError(this, "SAVE_VIDEO_PUBLIC_GALLERY", error)
+            appendDiagnosticLog("Erro ao salvar vídeo em galeria: ${error.message}", error)
             null
         }
     }
@@ -644,6 +674,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun appendDiagnosticLog(message: String, error: Throwable? = null) {
+        error?.let { ErrorFileLogger.logError(this, "DIAGNOSTIC", it) } ?: ErrorFileLogger.logInfo(this, "DIAGNOSTIC", message)
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
         val logFile = File(getExternalFilesDir(null) ?: filesDir, "replaycam_diagnostics.txt")
         val stacktrace = error?.stackTraceToString()?.trim().orEmpty()
@@ -673,6 +704,7 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(batteryReceiver)
         clearSegmentCache()
         rtmpStreamEngine?.close()
+        ErrorFileLogger.logInfo(this, "APP_DESTROY", "MainActivity destruída")
         cameraExecutor.shutdown()
     }
 }
