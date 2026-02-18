@@ -8,18 +8,18 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
 import com.google.android.gms.common.api.Scope
-import com.google.api.client.extensions.android.http.AndroidHttp
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.HttpRequestInitializer
+import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.youtube.YouTube
 import com.google.api.services.youtube.YouTubeScopes
+import com.google.api.services.youtube.model.CdnSettings
 import com.google.api.services.youtube.model.LiveBroadcast
 import com.google.api.services.youtube.model.LiveBroadcastContentDetails
 import com.google.api.services.youtube.model.LiveBroadcastSnippet
 import com.google.api.services.youtube.model.LiveBroadcastStatus
 import com.google.api.services.youtube.model.LiveStream
-import com.google.api.services.youtube.model.LiveStreamCdn
 import com.google.api.services.youtube.model.LiveStreamContentDetails
 import com.google.api.services.youtube.model.LiveStreamSnippet
 import com.google.api.services.youtube.model.MonitorStreamInfo
@@ -97,7 +97,7 @@ class YouTubeLiveHandler(private val context: Context) {
             request.readTimeout = 20_000
         }
 
-        return YouTube.Builder(AndroidHttp.newCompatibleTransport(), GsonFactory.getDefaultInstance(), initializer)
+        return YouTube.Builder(NetHttpTransport(), GsonFactory.getDefaultInstance(), initializer)
             .setApplicationName("ReplayCam")
             .build()
     }
@@ -120,7 +120,7 @@ class YouTubeLiveHandler(private val context: Context) {
 
         Log.i(tag, "Creating YouTube liveBroadcast")
         return youtube.liveBroadcasts()
-            .insert("snippet,status,contentDetails", LiveBroadcast().apply {
+            .insert(mutableListOf("snippet", "status", "contentDetails"), LiveBroadcast().apply {
                 this.snippet = snippet
                 this.status = status
                 this.contentDetails = contentDetails
@@ -132,7 +132,7 @@ class YouTubeLiveHandler(private val context: Context) {
         val snippet = LiveStreamSnippet().apply {
             title = "ReplayCam Stream ${System.currentTimeMillis()}"
         }
-        val cdn = LiveStreamCdn().apply {
+        val cdn = CdnSettings().apply {
             ingestionType = "rtmp"
             resolution = "720p"
             frameRate = "30fps"
@@ -143,7 +143,7 @@ class YouTubeLiveHandler(private val context: Context) {
 
         Log.i(tag, "Creating YouTube liveStream (720p/30fps)")
         return youtube.liveStreams()
-            .insert("snippet,cdn,contentDetails", LiveStream().apply {
+            .insert(mutableListOf("snippet", "cdn", "contentDetails"), LiveStream().apply {
                 this.snippet = snippet
                 this.cdn = cdn
                 this.contentDetails = contentDetails
@@ -154,7 +154,7 @@ class YouTubeLiveHandler(private val context: Context) {
     private fun bindBroadcastToStream(youtube: YouTube, broadcastId: String, streamId: String): LiveBroadcast {
         Log.i(tag, "Binding broadcast=$broadcastId to stream=$streamId")
         return youtube.liveBroadcasts()
-            .bind(broadcastId, "id,contentDetails")
+            .bind(broadcastId, mutableListOf("id", "contentDetails"))
             .setStreamId(streamId)
             .execute()
     }
