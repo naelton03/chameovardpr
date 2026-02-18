@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaMetadataRetriever
@@ -60,6 +61,8 @@ class MainActivity : AppCompatActivity() {
     private var activeRecording: Recording? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var displayManager: DisplayManager
+    private var previewDisplayId: Int = -1
     private val segmentDurationMs = 5_000L
     private val maxSegments = 4
     private val segmentFiles = ArrayDeque<File>()
@@ -72,6 +75,18 @@ class MainActivity : AppCompatActivity() {
     private var shouldStartLiveWithRecording = false
     private var activeGoogleAccount: Account? = null
     private var activeLiveSession: YouTubeLiveManager.LiveSession? = null
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+
+        override fun onDisplayRemoved(displayId: Int) = Unit
+
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId == previewDisplayId) {
+                updateCaptureRotation()
+            }
+        }
+    }
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -112,6 +127,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        displayManager = getSystemService(DisplayManager::class.java)
         youTubeLiveManager = YouTubeLiveManager(this)
 
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
@@ -128,6 +144,10 @@ class MainActivity : AppCompatActivity() {
         binding.openFolderButton.setOnClickListener { openVideoFolder() }
         updateVideoPathLabel()
         clearSegmentCache()
+        binding.previewView.post {
+            previewDisplayId = binding.previewView.display?.displayId ?: -1
+            updateCaptureRotation()
+        }
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -618,6 +638,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun toast(text: String) {
         Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        displayManager.registerDisplayListener(displayListener, mainHandler)
+    }
+
+    override fun onStop() {
+        displayManager.unregisterDisplayListener(displayListener)
+        super.onStop()
     }
 
     override fun onDestroy() {
