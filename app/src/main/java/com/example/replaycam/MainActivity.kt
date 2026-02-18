@@ -13,9 +13,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaMuxer
+import android.view.Surface
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -41,6 +39,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.media.MediaMuxer
+import android.media.MediaCodec
+import android.media.MediaExtractor
 
 class MainActivity : AppCompatActivity() {
 
@@ -257,6 +258,11 @@ class MainActivity : AppCompatActivity() {
         if (segments.isEmpty()) return false
 
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        
+        // Forçar resolução 9:16
+        val rotationDegrees = 90 // Garantir que sempre será retrato (9:16)
+        muxer.setOrientationHint(rotationDegrees)
+
         val bufferSize = 2 * 1024 * 1024
         val buffer = ByteBuffer.allocate(bufferSize)
         val videoInfo = MediaCodec.BufferInfo()
