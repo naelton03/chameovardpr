@@ -4,11 +4,13 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.util.Log
+import com.google.api.client.extensions.android.http.AndroidHttp
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.youtube.YouTube
+import com.google.api.services.youtube.model.LiveBroadcast
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -64,21 +66,20 @@ class MainActivity : AppCompatActivity() {
     private var isContinuousRecording = false
     private var isStopping = false
     private var recordingStartTime: Long = 0 // Para controle do tempo de gravação
-    private var pendingYoutubeReturn = false
     private var shouldStartRecordingAfterYoutube = false
     private var isYoutubeLiveRequested = false
+    private var activeBroadcastId: String? = null
 
     private val youtubeScope = Scope("https://www.googleapis.com/auth/youtube")
     private lateinit var googleSignInOptions: GoogleSignInOptions
-    private val youtubeLiveDashboardUrl = "https://studio.youtube.com/channel/UC/livestreaming/dashboard"
 
     private val youtubeSignInLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
         try {
-            task.getResult(ApiException::class.java)
-            openYoutubeDashboardForLive()
+            val account = task.getResult(ApiException::class.java)
+            triggerYoutubeLiveStart(account.id ?: account.email ?: "")
         } catch (exc: ApiException) {
             shouldStartRecordingAfterYoutube = false
             isYoutubeLiveRequested = false
@@ -127,16 +128,6 @@ class MainActivity : AppCompatActivity() {
     }
 
 
-    override fun onResume() {
-        super.onResume()
-
-        if (pendingYoutubeReturn && shouldStartRecordingAfterYoutube && !isContinuousRecording) {
-            pendingYoutubeReturn = false
-            status(getString(R.string.status_back_from_youtube))
-            startContinuousRecording()
-        }
-    }
-
     private fun onStartActionClicked() {
         if (isContinuousRecording) return
 
@@ -164,7 +155,7 @@ class MainActivity : AppCompatActivity() {
         val account = GoogleSignIn.getLastSignedInAccount(this)
         val hasPermission = account != null && GoogleSignIn.hasPermissions(account, youtubeScope)
         if (hasPermission) {
-            openYoutubeDashboardForLive()
+            triggerYoutubeLiveStart(account.id ?: account.email ?: "")
             return
         }
 
@@ -173,36 +164,136 @@ class MainActivity : AppCompatActivity() {
         youtubeSignInLauncher.launch(signInClient.signInIntent)
     }
 
-    private fun openYoutubeDashboardForLive() {
-        pendingYoutubeReturn = true
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(youtubeLiveDashboardUrl)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-
-        try {
-            startActivity(intent)
-        } catch (_: ActivityNotFoundException) {
-            pendingYoutubeReturn = false
+    private fun triggerYoutubeLiveStart(accountTag: String) {
+        val account = GoogleSignIn.getLastSignedInAccount(this)
+        val googleAccount = account?.account
+        if (googleAccount == null) {
             shouldStartRecordingAfterYoutube = false
             isYoutubeLiveRequested = false
-            status(getString(R.string.status_youtube_open_error))
-            toast(getString(R.string.youtube_open_error))
+            status(getString(R.string.status_youtube_login_failed))
+            toast(getString(R.string.youtube_login_failed))
+            return
         }
+
+        status(getString(R.string.status_starting_live_from_app))
+        cameraExecutor.execute {
+            try {
+                val credential = GoogleAccountCredential.usingOAuth2(this, listOf(youtubeScope.scopeUri)).apply {
+                    selectedAccount = googleAccount
+                }
+                val youtube = YouTube.Builder(
+                    AndroidHttp.newCompatibleTransport(),
+                    GsonFactory.getDefaultInstance(),
+                    credential
+                ).setApplicationName(getString(R.string.app_name)).build()
+
+                val broadcast = findStartableBroadcast(youtube)
+                if (broadcast == null) {
+                    runOnUiThread {
+                        shouldStartRecordingAfterYoutube = false
+                        isYoutubeLiveRequested = false
+                        status(getString(R.string.status_no_broadcast_ready))
+                        toast(getString(R.string.status_no_broadcast_ready))
+                    }
+                    return@execute
+                }
+
+                val broadcastId = broadcast.id ?: run {
+                    runOnUiThread {
+                        shouldStartRecordingAfterYoutube = false
+                        isYoutubeLiveRequested = false
+                        status(getString(R.string.status_no_broadcast_ready))
+                        toast(getString(R.string.status_no_broadcast_ready))
+                    }
+                    return@execute
+                }
+
+                val lifecycle = broadcast.status?.lifeCycleStatus.orEmpty()
+                if (lifecycle == "live") {
+                    activeBroadcastId = broadcastId
+                    runOnUiThread {
+                        status(getString(R.string.status_back_from_youtube))
+                        startContinuousRecording()
+                    }
+                    return@execute
+                }
+
+                if (lifecycle == "ready" || lifecycle == "testing") {
+                    youtube.liveBroadcasts().transition("live", broadcastId, "status").execute()
+                    activeBroadcastId = broadcastId
+                    runOnUiThread {
+                        status(getString(R.string.status_back_from_youtube))
+                        startContinuousRecording()
+                    }
+                    return@execute
+                }
+
+                runOnUiThread {
+                    shouldStartRecordingAfterYoutube = false
+                    isYoutubeLiveRequested = false
+                    status(getString(R.string.status_broadcast_not_ready, lifecycle))
+                    toast(getString(R.string.status_broadcast_not_ready, lifecycle))
+                }
+            } catch (exc: Exception) {
+                Log.e("ReplayCam", "Falha ao iniciar live pelo app ($accountTag)", exc)
+                runOnUiThread {
+                    shouldStartRecordingAfterYoutube = false
+                    isYoutubeLiveRequested = false
+                    status(getString(R.string.status_start_live_failed))
+                    toast(getString(R.string.status_start_live_failed))
+                }
+            }
+        }
+    }
+
+    private fun findStartableBroadcast(youtube: YouTube): LiveBroadcast? {
+        val broadcasts = youtube.liveBroadcasts()
+            .list("id,snippet,status")
+            .setMine(true)
+            .setBroadcastStatus("all")
+            .setMaxResults(25L)
+            .execute()
+            .items
+            .orEmpty()
+
+        return broadcasts.firstOrNull {
+            val state = it.status?.lifeCycleStatus.orEmpty()
+            state == "live" || state == "ready" || state == "testing"
+        }
+            ?: broadcasts.firstOrNull { it.status?.lifeCycleStatus == "created" }
     }
 
     private fun pauseYoutubeLiveIfNeeded() {
         if (!isYoutubeLiveRequested) return
 
+        val broadcastId = activeBroadcastId
         isYoutubeLiveRequested = false
-        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(youtubeLiveDashboardUrl)).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        activeBroadcastId = null
+
+        if (broadcastId == null) {
+            toast(getString(R.string.youtube_pause_open_error))
+            return
         }
 
-        try {
-            startActivity(intent)
-            toast(getString(R.string.youtube_pause_hint))
-        } catch (_: ActivityNotFoundException) {
-            toast(getString(R.string.youtube_pause_open_error))
+        cameraExecutor.execute {
+            try {
+                val account = GoogleSignIn.getLastSignedInAccount(this)
+                val googleAccount = account?.account ?: return@execute
+                val credential = GoogleAccountCredential.usingOAuth2(this, listOf(youtubeScope.scopeUri)).apply {
+                    selectedAccount = googleAccount
+                }
+                val youtube = YouTube.Builder(
+                    AndroidHttp.newCompatibleTransport(),
+                    GsonFactory.getDefaultInstance(),
+                    credential
+                ).setApplicationName(getString(R.string.app_name)).build()
+
+                youtube.liveBroadcasts().transition("complete", broadcastId, "status").execute()
+                runOnUiThread { toast(getString(R.string.youtube_pause_hint)) }
+            } catch (exc: Exception) {
+                Log.e("ReplayCam", "Falha ao pausar/encerrar live pelo app", exc)
+                runOnUiThread { toast(getString(R.string.youtube_pause_open_error)) }
+            }
         }
     }
 
@@ -370,7 +461,6 @@ class MainActivity : AppCompatActivity() {
         isStopping = true
         isContinuousRecording = false
         shouldStartRecordingAfterYoutube = false
-        pendingYoutubeReturn = false
         activeRecording?.stop()
         activeRecording = null
 
