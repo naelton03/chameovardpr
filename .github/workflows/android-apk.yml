@@ -34,7 +34,8 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             VERSION_TAG="pr-${{ github.event.pull_request.number }}-run-${{ github.run_number }}"
           else
-            VERSION_TAG="${{ github.ref_name }}-run-${{ github.run_number }}"
+            SAFE_REF="$(echo "${{ github.ref_name }}" | sed 's#[^A-Za-z0-9._-]#-#g')"
+            VERSION_TAG="${SAFE_REF}-run-${{ github.run_number }}"
           fi
           APK_NAME="replaycam-debug-${VERSION_TAG}.apk"
           cp app/build/outputs/apk/debug/app-debug.apk "dist/${APK_NAME}"
