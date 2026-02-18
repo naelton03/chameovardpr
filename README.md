@@ -5,7 +5,7 @@ Aplicativo Android focado em gravação contínua de câmera para capturar repla
 ## Funcionalidades principais
 
 - **Começar gravação contínua:** mantém os últimos 20s em cache temporário (segmentos de 5s), sem salvar automaticamente na galeria.
-- **Salvar replay (20s):** ao tocar no botão, o app salva na galeria exatamente os 20s anteriores ao acionamento (4 arquivos MP4).
+- **Salvar replay (20s):** ao tocar no botão, o app salva na galeria exatamente os 20s anteriores ao acionamento em um único arquivo MP4.
 
 > Observação: apenas a ação de replay grava na galeria (`Movies/ReplayCam`). A gravação contínua permanece em cache temporário.
 

@@ -13,6 +13,9 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -31,6 +34,7 @@ import androidx.core.content.ContextCompat
 import com.example.replaycam.databinding.ActivityMainBinding
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.ArrayDeque
 import java.util.Date
@@ -221,28 +225,138 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveReplayBundle() {
-        if (segmentFiles.isEmpty()) {
-            toast("Ainda não há 20s para replay")
+        if (segmentFiles.size < maxSegments) {
+            toast("Aguarde preencher 20s no buffer")
             return
         }
 
         val stamp = timestamp()
-        var savedCount = 0
-
-        segmentFiles.forEachIndexed { index, segment ->
-            val name = "replay_${stamp}_part_${index + 1}.mp4"
-            val savedUri = saveVideoToPublicGallery(segment, name)
-            if (savedUri != null) savedCount++
+        val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
+        val merged = mergeSegmentsIntoSingleVideo(segmentFiles.toList(), mergedReplay)
+        if (!merged) {
+            status("Erro ao montar replay único")
+            toast("Falha ao montar replay de 20s")
+            return
         }
 
-        if (savedCount == 0) {
+        val outputName = "replay_${stamp}.mp4"
+        val savedUri = saveVideoToPublicGallery(mergedReplay, outputName)
+        mergedReplay.delete()
+
+        if (savedUri == null) {
             status("Erro ao salvar replay na galeria")
             toast("Falha ao salvar replay na galeria")
             return
         }
 
-        status("Status: replay salvo na galeria ($savedCount arquivos)")
+        status("Status: replay único salvo na galeria")
         toast("Replay salvo em ${getPublicReplayPathLabel()}")
+    }
+
+    private fun mergeSegmentsIntoSingleVideo(segments: List<File>, outputFile: File): Boolean {
+        if (segments.isEmpty()) return false
+
+        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        val bufferSize = 2 * 1024 * 1024
+        val buffer = ByteBuffer.allocate(bufferSize)
+        val videoInfo = MediaCodec.BufferInfo()
+        val audioInfo = MediaCodec.BufferInfo()
+
+        var videoTrackIndex = -1
+        var audioTrackIndex = -1
+        var started = false
+        var videoPtsOffset = 0L
+        var audioPtsOffset = 0L
+
+        try {
+            for (segment in segments) {
+                if (!segment.exists() || segment.length() == 0L) continue
+
+                val extractor = MediaExtractor()
+                extractor.setDataSource(segment.absolutePath)
+
+                var srcVideoTrack = -1
+                var srcAudioTrack = -1
+                for (i in 0 until extractor.trackCount) {
+                    val format = extractor.getTrackFormat(i)
+                    val mime = format.getString("mime") ?: continue
+                    if (mime.startsWith("video/")) {
+                        srcVideoTrack = i
+                        if (videoTrackIndex == -1) {
+                            videoTrackIndex = muxer.addTrack(format)
+                        }
+                    } else if (mime.startsWith("audio/")) {
+                        srcAudioTrack = i
+                        if (audioTrackIndex == -1) {
+                            audioTrackIndex = muxer.addTrack(format)
+                        }
+                    }
+                }
+
+                if (!started && (videoTrackIndex != -1 || audioTrackIndex != -1)) {
+                    muxer.start()
+                    started = true
+                }
+
+                if (!started) {
+                    extractor.release()
+                    continue
+                }
+
+                if (srcVideoTrack != -1 && videoTrackIndex != -1) {
+                    extractor.selectTrack(srcVideoTrack)
+                    var lastPts = 0L
+                    while (true) {
+                        val sampleSize = extractor.readSampleData(buffer, 0)
+                        if (sampleSize < 0) break
+
+                        videoInfo.offset = 0
+                        videoInfo.size = sampleSize
+                        videoInfo.presentationTimeUs = videoPtsOffset + extractor.sampleTime
+                        videoInfo.flags = extractor.sampleFlags
+                        muxer.writeSampleData(videoTrackIndex, buffer, videoInfo)
+                        lastPts = videoInfo.presentationTimeUs
+                        extractor.advance()
+                    }
+                    extractor.unselectTrack(srcVideoTrack)
+                    videoPtsOffset = if (lastPts > 0L) lastPts + 1L else videoPtsOffset
+                }
+
+                if (srcAudioTrack != -1 && audioTrackIndex != -1) {
+                    extractor.selectTrack(srcAudioTrack)
+                    var lastPts = 0L
+                    while (true) {
+                        val sampleSize = extractor.readSampleData(buffer, 0)
+                        if (sampleSize < 0) break
+
+                        audioInfo.offset = 0
+                        audioInfo.size = sampleSize
+                        audioInfo.presentationTimeUs = audioPtsOffset + extractor.sampleTime
+                        audioInfo.flags = extractor.sampleFlags
+                        muxer.writeSampleData(audioTrackIndex, buffer, audioInfo)
+                        lastPts = audioInfo.presentationTimeUs
+                        extractor.advance()
+                    }
+                    extractor.unselectTrack(srcAudioTrack)
+                    audioPtsOffset = if (lastPts > 0L) lastPts + 1L else audioPtsOffset
+                }
+
+                extractor.release()
+            }
+        } catch (_: Exception) {
+            return false
+        } finally {
+            try {
+                if (started) muxer.stop()
+            } catch (_: Exception) {
+            }
+            try {
+                muxer.release()
+            } catch (_: Exception) {
+            }
+        }
+
+        return outputFile.exists() && outputFile.length() > 0
     }
 
     private fun saveVideoToPublicGallery(source: File, displayName: String): Uri? {
