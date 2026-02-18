@@ -2,6 +2,7 @@ package com.example.replaycam
 
 import android.content.Context
 import android.content.Intent
+import android.util.Log
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
@@ -29,6 +30,8 @@ import java.util.Date
 import java.util.Locale
 
 class YouTubeLiveHandler(private val context: Context) {
+
+    private val tag = "YouTubeLiveHandler"
 
     private val signInClient: GoogleSignInClient by lazy {
         val webClientId = context.resources.getIdentifier(
@@ -62,10 +65,12 @@ class YouTubeLiveHandler(private val context: Context) {
     fun isAuthenticated(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
 
     suspend fun createLiveSession(account: GoogleSignInAccount): LiveSessionInfo = withContext(Dispatchers.IO) {
+        Log.i(tag, "createLiveSession start for account=${account.email}")
         val youtube = buildYouTubeService(account)
         val stream = createLiveStream(youtube)
         val broadcast = createLiveBroadcast(youtube)
         bindBroadcastToStream(youtube, broadcast.id, stream.id)
+        Log.i(tag, "createLiveSession done broadcastId=${broadcast.id} streamId=${stream.id}")
 
         val ingestion = stream.cdn?.ingestionInfo
             ?: error("YouTube retornou stream sem ingestionInfo")
@@ -113,6 +118,7 @@ class YouTubeLiveHandler(private val context: Context) {
             enableAutoStop = false
         }
 
+        Log.i(tag, "Creating YouTube liveBroadcast")
         return youtube.liveBroadcasts()
             .insert("snippet,status,contentDetails", LiveBroadcast().apply {
                 this.snippet = snippet
@@ -135,6 +141,7 @@ class YouTubeLiveHandler(private val context: Context) {
             isReusable = true
         }
 
+        Log.i(tag, "Creating YouTube liveStream (720p/30fps)")
         return youtube.liveStreams()
             .insert("snippet,cdn,contentDetails", LiveStream().apply {
                 this.snippet = snippet
@@ -145,6 +152,7 @@ class YouTubeLiveHandler(private val context: Context) {
     }
 
     private fun bindBroadcastToStream(youtube: YouTube, broadcastId: String, streamId: String): LiveBroadcast {
+        Log.i(tag, "Binding broadcast=$broadcastId to stream=$streamId")
         return youtube.liveBroadcasts()
             .bind(broadcastId, "id,contentDetails")
             .setStreamId(streamId)

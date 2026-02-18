@@ -19,6 +19,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -53,6 +54,8 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    private val tag = "MainActivity"
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -77,6 +80,7 @@ class MainActivity : AppCompatActivity() {
             if (tempTenths <= 0) return
             val tempCelsius = tempTenths / 10f
             if (tempCelsius >= 45f) {
+                Log.w(tag, "Thermal throttle triggered temp=$tempCelsius")
                 rtmpStreamEngine?.setBitrateOnFly(1_200_000)
                 toast(getString(R.string.temperature_warning, tempCelsius))
             }
@@ -96,12 +100,14 @@ class MainActivity : AppCompatActivity() {
 
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != RESULT_OK) {
+            Log.w(tag, "Google login cancelado pelo usuário")
             toast("Login Google cancelado")
             return@registerForActivityResult
         }
 
         val account = youtubeLiveHandler.parseSignInResult(result.data)
         if (account == null) {
+            Log.e(tag, "Falha ao parsear resultado do Google Sign-In")
             toast("Falha ao autenticar no Google")
             return@registerForActivityResult
         }
@@ -179,6 +185,7 @@ class MainActivity : AppCompatActivity() {
         val streamer = rtmpStreamEngine ?: return
 
         if (streamer.isStreaming()) {
+            Log.i(tag, "Solicitado stop da live")
             streamer.stopStream()
             updateLiveButtonUi(false)
             status(getString(R.string.live_stopped))
@@ -187,6 +194,7 @@ class MainActivity : AppCompatActivity() {
 
         if (signedAccount == null && !youtubeLiveHandler.isAuthenticated()) {
             toast(getString(R.string.live_requires_auth))
+            Log.i(tag, "Iniciando fluxo OAuth Google Sign-In")
             signInLauncher.launch(youtubeLiveHandler.authIntent())
             return
         }
@@ -203,6 +211,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         withContext(Dispatchers.Main) {
+            Log.i(tag, "Criando sessão YouTube Live")
             status("Status: criando sessão YouTube Live...")
             binding.toggleLiveButton.isEnabled = false
         }
@@ -212,6 +221,7 @@ class MainActivity : AppCompatActivity() {
         }.onSuccess { session ->
             signedAccount = safeAccount
             val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"
+            Log.i(tag, "Sessão criada broadcast=${session.broadcastId} stream=${session.streamId}")
             rtmpStreamEngine?.startStream(endpoint)
             withContext(Dispatchers.Main) {
                 updateLiveButtonUi(true)
@@ -220,6 +230,7 @@ class MainActivity : AppCompatActivity() {
         }.onFailure { error ->
             withContext(Dispatchers.Main) {
                 updateLiveButtonUi(false)
+                Log.e(tag, "Erro ao iniciar live", error)
                 status("Erro ao iniciar live: ${error.message}")
             }
         }
