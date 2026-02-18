@@ -62,6 +62,7 @@ dependencies {
     add("implementation", "com.google.android.gms:play-services-auth:21.2.0")
     add("implementation", "com.google.apis:google-api-services-youtube:v3-rev20210915-1.32.1")
     add("implementation", "com.google.http-client:google-http-client-gson:1.42.3")
+    add("implementation", "com.google.http-client:google-http-client-android:1.42.3")
     add("implementation", "com.google.api-client:google-api-client-android:1.35.2")
 
  

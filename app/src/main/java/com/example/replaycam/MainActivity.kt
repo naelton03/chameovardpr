@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
+import android.content.Intent
 import android.util.Log
 import com.google.api.client.extensions.android.http.AndroidHttp
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
@@ -11,6 +12,7 @@ import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.youtube.YouTube
 import com.google.api.services.youtube.model.LiveBroadcast
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -153,8 +155,7 @@ class MainActivity : AppCompatActivity() {
         toast(getString(R.string.youtube_login_hint))
 
         val account = GoogleSignIn.getLastSignedInAccount(this)
-        val hasPermission = account != null && GoogleSignIn.hasPermissions(account, youtubeScope)
-        if (hasPermission) {
+        if (account != null && GoogleSignIn.hasPermissions(account, youtubeScope)) {
             triggerYoutubeLiveStart(account.id ?: account.email ?: "")
             return
         }
@@ -219,7 +220,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 if (lifecycle == "ready" || lifecycle == "testing") {
-                    youtube.liveBroadcasts().transition("live", broadcastId, "status").execute()
+                    youtube.liveBroadcasts().transition("live", broadcastId, listOf("status")).execute()
                     activeBroadcastId = broadcastId
                     runOnUiThread {
                         status(getString(R.string.status_back_from_youtube))
@@ -248,7 +249,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun findStartableBroadcast(youtube: YouTube): LiveBroadcast? {
         val broadcasts = youtube.liveBroadcasts()
-            .list("id,snippet,status")
+            .list(listOf("id", "snippet", "status"))
             .setMine(true)
             .setBroadcastStatus("all")
             .setMaxResults(25L)
@@ -288,7 +289,7 @@ class MainActivity : AppCompatActivity() {
                     credential
                 ).setApplicationName(getString(R.string.app_name)).build()
 
-                youtube.liveBroadcasts().transition("complete", broadcastId, "status").execute()
+                youtube.liveBroadcasts().transition("complete", broadcastId, listOf("status")).execute()
                 runOnUiThread { toast(getString(R.string.youtube_pause_hint)) }
             } catch (exc: Exception) {
                 Log.e("ReplayCam", "Falha ao pausar/encerrar live pelo app", exc)
