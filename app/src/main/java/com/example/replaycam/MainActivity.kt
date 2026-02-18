@@ -186,7 +186,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onSegmentSaved(file: File, uri: Uri) {
-        if (uri == Uri.EMPTY) {
+        val hasValidFile = file.exists() && file.length() > 0
+        val hasValidUri = uri != Uri.EMPTY
+
+        if (!hasValidFile && !hasValidUri) {
+            status("Segmento inválido, descartado")
             return
         }
 
@@ -220,7 +224,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val replayDir = File(getOutputDirectory(), "replays")
+        val replayDir = getReplayDirectory()
         if (!replayDir.exists()) {
             replayDir.mkdirs()
         }
@@ -240,18 +244,21 @@ class MainActivity : AppCompatActivity() {
 
 
     private fun updateVideoPathLabel() {
+        val rootPath = getOutputDirectory().absolutePath
+        val replayPath = getReplayDirectory().absolutePath
         binding.videoPathText.text = getString(
             R.string.video_path,
-            getOutputDirectory().absolutePath
+            rootPath,
+            replayPath
         )
     }
 
     private fun openVideoFolder() {
-        val outputDir = getOutputDirectory()
+        val replayDir = getReplayDirectory().apply { mkdirs() }
         val uri = FileProvider.getUriForFile(
             this,
             "${applicationContext.packageName}.fileprovider",
-            outputDir
+            replayDir
         )
 
         val viewIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -264,7 +271,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val path = outputDir.absolutePath
+        val path = replayDir.absolutePath
         val clipboard = getSystemService(ClipboardManager::class.java)
         clipboard?.setPrimaryClip(ClipData.newPlainText("video_path", path))
         toast(getString(R.string.video_folder_open_error))
@@ -272,12 +279,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createSegmentFile(): File {
-        val segmentsDir = File(getOutputDirectory(), "segments")
+        val segmentsDir = getSegmentsDirectory()
         if (!segmentsDir.exists()) {
             segmentsDir.mkdirs()
         }
         return File(segmentsDir, "segment_${timestamp()}.mp4")
     }
+
+    private fun getSegmentsDirectory(): File = File(getOutputDirectory(), "segments")
+
+    private fun getReplayDirectory(): File = File(getOutputDirectory(), "replays")
 
     private fun getOutputDirectory(): File {
         val movieDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
