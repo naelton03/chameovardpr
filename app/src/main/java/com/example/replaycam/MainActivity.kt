@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -57,6 +58,10 @@ class MainActivity : AppCompatActivity() {
     private var isContinuousRecording = false
     private var isStopping = false
     private var recordingStartTime: Long = 0 // Para controle do tempo de gravação
+    private var pendingYoutubeReturn = false
+    private var pendingRecordingStart = false
+
+    private val youtubeLiveDashboardUrl = "https://studio.youtube.com/channel/UC/livestreaming/dashboard"
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -76,8 +81,8 @@ class MainActivity : AppCompatActivity() {
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        // Configuração do contador de tempo
-        binding.startButton.setOnClickListener { startContinuousRecording() }
+        // Configuração do fluxo de live
+        binding.startButton.setOnClickListener { beginYoutubeLiveFlow() }
         binding.stopButton.setOnClickListener { stopContinuousRecording() }
         binding.replayButton.setOnClickListener { saveReplayBundle() }
         binding.openFolderButton.setOnClickListener { openVideoFolder() }
@@ -88,6 +93,39 @@ class MainActivity : AppCompatActivity() {
             startCamera()
         } else {
             requestPermissions.launch(requiredPermissions())
+        }
+    }
+
+
+    override fun onResume() {
+        super.onResume()
+
+        if (pendingYoutubeReturn && pendingRecordingStart && !isContinuousRecording) {
+            pendingYoutubeReturn = false
+            status(getString(R.string.status_back_from_youtube))
+            startContinuousRecording()
+        }
+    }
+
+    private fun beginYoutubeLiveFlow() {
+        if (isContinuousRecording) return
+
+        pendingRecordingStart = true
+        pendingYoutubeReturn = true
+        status(getString(R.string.status_opening_youtube))
+        toast(getString(R.string.youtube_login_hint))
+
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(youtubeLiveDashboardUrl)).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            pendingYoutubeReturn = false
+            pendingRecordingStart = false
+            status(getString(R.string.status_youtube_open_error))
+            toast(getString(R.string.youtube_open_error))
         }
     }
 
@@ -157,10 +195,12 @@ class MainActivity : AppCompatActivity() {
         if (isContinuousRecording) return
 
         val capture = videoCapture ?: run {
+            pendingRecordingStart = false
             toast("Câmera não inicializada")
             return
         }
 
+        pendingRecordingStart = false
         clearSegmentCache()
         binding.replayButton.isEnabled = false
         isContinuousRecording = true
@@ -168,7 +208,7 @@ class MainActivity : AppCompatActivity() {
         binding.startButton.isEnabled = false
         binding.stopButton.isEnabled = true
         binding.replayButton.isEnabled = true
-        status("Status: gravando continuamente")
+        status(getString(R.string.status_recording_live))
 
         // Iniciar o contador de tempo
         recordingStartTime = System.currentTimeMillis()
@@ -253,7 +293,7 @@ class MainActivity : AppCompatActivity() {
         binding.startButton.isEnabled = true
         binding.stopButton.isEnabled = false
         binding.replayButton.isEnabled = false
-        status("Status: gravação parada")
+        status(getString(R.string.status_live_stopped))
         clearSegmentCache()
 
         // Parar o contador

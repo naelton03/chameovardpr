@@ -1,11 +1,18 @@
 <resources>
     <string name="app_name">ReplayCam</string>
-    <string name="start_live">Começar gravação contínua</string>
-    <string name="stop_live">Parar gravação</string>
+    <string name="start_live">Fazer live no YouTube</string>
+    <string name="stop_live">Encerrar live no YouTube</string>
     <string name="save_replay">Salvar replay (20s)</string>
     <string name="open_video_folder">Abrir galeria</string>
     <string name="video_path">Replays salvos em: %1$s</string>
     <string name="video_folder_open_error">Não foi possível abrir a galeria. Caminho copiado.</string>
     <string name="video_path_copied">Caminho copiado: %1$s</string>
-    <string name="status_idle">Status: pronto</string>
+    <string name="status_idle">Status: pronto para live no YouTube</string>
+    <string name="status_opening_youtube">Status: abra e configure sua live no YouTube</string>
+    <string name="status_back_from_youtube">Status: voltando ao app e iniciando gravação da live</string>
+    <string name="status_recording_live">Status: live em gravação contínua</string>
+    <string name="status_live_stopped">Status: live/gravação encerrada</string>
+    <string name="status_youtube_open_error">Erro ao abrir configurações de live do YouTube</string>
+    <string name="youtube_login_hint">Faça login no Google/YouTube, inicie sua live e volte ao app para controlar a gravação.</string>
+    <string name="youtube_open_error">Não foi possível abrir o YouTube Studio no dispositivo.</string>
 </resources>
