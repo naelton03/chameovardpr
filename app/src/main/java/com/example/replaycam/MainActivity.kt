@@ -13,9 +13,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaMuxer
+import android.view.Surface
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -41,6 +39,9 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import android.media.MediaMuxer
+import android.media.MediaCodec
+import android.media.MediaExtractor
 
 class MainActivity : AppCompatActivity() {
 
@@ -121,6 +122,19 @@ class MainActivity : AppCompatActivity() {
                 .build()
 
             videoCapture = VideoCapture.withOutput(recorder)
+
+            // Obter rotação do dispositivo
+            val rotation = windowManager.defaultDisplay.rotation
+            val rotationDegrees = when (rotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+
+            // Aplica a rotação corretamente durante a gravação
+            videoCapture?.targetRotation = rotationDegrees
 
             try {
                 cameraProvider.unbindAll()
@@ -257,6 +271,19 @@ class MainActivity : AppCompatActivity() {
         if (segments.isEmpty()) return false
 
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        
+        // Aqui aplicamos a rotação ao muxer
+        val rotation = windowManager.defaultDisplay.rotation
+        val rotationDegrees = when (rotation) {
+            Surface.ROTATION_0 -> 0
+            Surface.ROTATION_90 -> 90
+            Surface.ROTATION_180 -> 180
+            Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+
+        muxer.setOrientationHint(rotationDegrees)
+
         val bufferSize = 2 * 1024 * 1024
         val buffer = ByteBuffer.allocate(bufferSize)
         val videoInfo = MediaCodec.BufferInfo()
