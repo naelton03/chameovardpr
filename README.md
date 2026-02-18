@@ -19,7 +19,7 @@ Aplicativo Android focado em gravação contínua de câmera para capturar repla
 ## Build local
 
 ```bash
-gradle assembleDebug
+./gradlew assembleDebug
 ```
 
 APK gerado em:

@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+source "$ROOT_DIR/scripts/gradle_java_compat.sh"
+ensure_android_build_java
+
 REPO_SLUG="${1:-${REPLAYCAM_REPO_SLUG:-}}"
 APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 
@@ -60,8 +63,8 @@ install_local_apk() {
 }
 
 if can_reach_build_repositories; then
-  echo "[ReplayCam] Tentando build local: gradle assembleDebug"
-  if gradle assembleDebug; then
+  echo "[ReplayCam] Tentando build local: ./gradlew assembleDebug"
+  if ./gradlew assembleDebug; then
     install_local_apk
     exit 0
   fi
