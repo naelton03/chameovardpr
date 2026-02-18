@@ -1,11 +1,17 @@
 package com.example.replaycam
 
 import android.Manifest
+import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.ContentValues
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,7 +19,6 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
-import android.view.Surface
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -29,7 +34,13 @@ import androidx.camera.video.Recording
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.replaycam.databinding.ActivityMainBinding
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -39,9 +50,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import android.media.MediaMuxer
-import android.media.MediaCodec
-import android.media.MediaExtractor
 
 class MainActivity : AppCompatActivity() {
 
@@ -50,12 +58,30 @@ class MainActivity : AppCompatActivity() {
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
 
+    private lateinit var youtubeLiveHandler: YouTubeLiveHandler
+    private var rtmpStreamEngine: RtmpStreamEngine? = null
+    private var signedAccount: GoogleSignInAccount? = null
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
     private val maxSegments = 4
     private val segmentFiles = ArrayDeque<File>()
+    private val segmentLock = Any()
     private var isContinuousRecording = false
     private var isStopping = false
+
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != Intent.ACTION_BATTERY_CHANGED) return
+            val tempTenths = intent.getIntExtra("temperature", -1)
+            if (tempTenths <= 0) return
+            val tempCelsius = tempTenths / 10f
+            if (tempCelsius >= 45f) {
+                rtmpStreamEngine?.setBitrateOnFly(1_200_000)
+                toast(getString(R.string.temperature_warning, tempCelsius))
+            }
+        }
+    }
 
     private val requestPermissions = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -68,17 +94,40 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode != RESULT_OK) {
+            toast("Login Google cancelado")
+            return@registerForActivityResult
+        }
+
+        val account = youtubeLiveHandler.parseSignInResult(result.data)
+        if (account == null) {
+            toast("Falha ao autenticar no Google")
+            return@registerForActivityResult
+        }
+
+        signedAccount = account
+        lifecycleScope.launch {
+            startLiveFlow(account)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        youtubeLiveHandler = YouTubeLiveHandler(this)
+        rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
+        signedAccount = GoogleSignIn.getLastSignedInAccount(this)
 
         binding.startButton.setOnClickListener { startContinuousRecording() }
         binding.stopButton.setOnClickListener { stopContinuousRecording() }
         binding.replayButton.setOnClickListener { saveReplayBundle() }
         binding.openFolderButton.setOnClickListener { openVideoFolder() }
+        binding.toggleLiveButton.setOnClickListener { handleLiveToggleClick() }
+        updateLiveButtonUi(false)
         updateVideoPathLabel()
         clearSegmentCache()
 
@@ -87,6 +136,103 @@ class MainActivity : AppCompatActivity() {
         } else {
             requestPermissions.launch(requiredPermissions())
         }
+
+        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }
+
+    private val streamCallbacks = object : RtmpStreamEngine.Callbacks {
+        override fun onConnected() {
+            runOnUiThread {
+                updateLiveButtonUi(true)
+                status("Status: live conectada")
+            }
+        }
+
+        override fun onDisconnected() {
+            runOnUiThread {
+                updateLiveButtonUi(false)
+                status("Status: live desconectada")
+            }
+        }
+
+        override fun onConnectionFailed(reason: String) {
+            runOnUiThread {
+                updateLiveButtonUi(false)
+                status("Live falhou: $reason")
+            }
+        }
+
+        override fun onAuthError() {
+            runOnUiThread { toast("Erro de autenticação RTMP") }
+        }
+
+        override fun onAuthSuccess() {
+            runOnUiThread { toast("Autenticação RTMP OK") }
+        }
+
+        override fun onRetrying(delayMs: Long, reason: String) {
+            runOnUiThread { status("Reconectando live em ${delayMs}ms ($reason)") }
+        }
+    }
+
+    private fun handleLiveToggleClick() {
+        val streamer = rtmpStreamEngine ?: return
+
+        if (streamer.isStreaming()) {
+            streamer.stopStream()
+            updateLiveButtonUi(false)
+            status(getString(R.string.live_stopped))
+            return
+        }
+
+        if (signedAccount == null && !youtubeLiveHandler.isAuthenticated()) {
+            toast(getString(R.string.live_requires_auth))
+            signInLauncher.launch(youtubeLiveHandler.authIntent())
+            return
+        }
+
+        lifecycleScope.launch {
+            startLiveFlow(signedAccount ?: GoogleSignIn.getLastSignedInAccount(this@MainActivity))
+        }
+    }
+
+    private suspend fun startLiveFlow(account: GoogleSignInAccount?) {
+        val safeAccount = account ?: run {
+            toast(getString(R.string.live_requires_auth))
+            return
+        }
+
+        withContext(Dispatchers.Main) {
+            status("Status: criando sessão YouTube Live...")
+            binding.toggleLiveButton.isEnabled = false
+        }
+
+        runCatching {
+            youtubeLiveHandler.createLiveSession(safeAccount)
+        }.onSuccess { session ->
+            signedAccount = safeAccount
+            val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"
+            rtmpStreamEngine?.startStream(endpoint)
+            withContext(Dispatchers.Main) {
+                updateLiveButtonUi(true)
+                status(getString(R.string.live_created))
+            }
+        }.onFailure { error ->
+            withContext(Dispatchers.Main) {
+                updateLiveButtonUi(false)
+                status("Erro ao iniciar live: ${error.message}")
+            }
+        }
+
+        withContext(Dispatchers.Main) {
+            binding.toggleLiveButton.isEnabled = true
+        }
+    }
+
+    private fun updateLiveButtonUi(isLive: Boolean) {
+        binding.toggleLiveButton.text = if (isLive) getString(R.string.live_on) else getString(R.string.live_off)
+        val color = if (isLive) android.R.color.holo_red_dark else android.R.color.darker_gray
+        binding.toggleLiveButton.setBackgroundColor(ContextCompat.getColor(this, color))
     }
 
     private fun allPermissionsGranted(): Boolean {
@@ -202,10 +348,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        segmentFiles.addLast(file)
-        while (segmentFiles.size > maxSegments) {
-            val removed = segmentFiles.removeFirst()
-            removed.delete()
+        synchronized(segmentLock) {
+            segmentFiles.addLast(file)
+            while (segmentFiles.size > maxSegments) {
+                val removed = segmentFiles.removeFirst()
+                removed.delete()
+            }
         }
         status("Status: buffer ativo (${segmentFiles.size * 5}s)")
     }
@@ -226,41 +374,46 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveReplayBundle() {
-        if (segmentFiles.size < maxSegments) {
+        val snapshot = synchronized(segmentLock) { segmentFiles.toList() }
+        if (snapshot.size < maxSegments) {
             toast("Aguarde preencher 20s no buffer")
             return
         }
 
-        val stamp = timestamp()
-        val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
-        val merged = mergeSegmentsIntoSingleVideo(segmentFiles.toList(), mergedReplay)
-        if (!merged) {
-            status("Erro ao montar replay único")
-            toast("Falha ao montar replay de 20s")
-            return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val stamp = timestamp()
+            val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
+            val merged = mergeSegmentsIntoSingleVideo(snapshot, mergedReplay)
+            if (!merged) {
+                withContext(Dispatchers.Main) {
+                    status("Erro ao montar replay único")
+                    toast("Falha ao montar replay de 20s")
+                }
+                return@launch
+            }
+
+            val outputName = "replay_${stamp}.mp4"
+            val savedUri = saveVideoToPublicGallery(mergedReplay, outputName)
+            mergedReplay.delete()
+
+            withContext(Dispatchers.Main) {
+                if (savedUri == null) {
+                    status("Erro ao salvar replay na galeria")
+                    toast("Falha ao salvar replay na galeria")
+                    return@withContext
+                }
+
+                status("Status: replay único salvo na galeria")
+                toast("Replay salvo em ${getPublicReplayPathLabel()}")
+            }
         }
-
-        val outputName = "replay_${stamp}.mp4"
-        val savedUri = saveVideoToPublicGallery(mergedReplay, outputName)
-        mergedReplay.delete()
-
-        if (savedUri == null) {
-            status("Erro ao salvar replay na galeria")
-            toast("Falha ao salvar replay na galeria")
-            return
-        }
-
-        status("Status: replay único salvo na galeria")
-        toast("Replay salvo em ${getPublicReplayPathLabel()}")
     }
 
     private fun mergeSegmentsIntoSingleVideo(segments: List<File>, outputFile: File): Boolean {
         if (segments.isEmpty()) return false
 
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        
-        // Forçar resolução 9:16
-        val rotationDegrees = 90 // Garantir que sempre será retrato (9:16)
+        val rotationDegrees = 90
         muxer.setOrientationHint(rotationDegrees)
 
         val bufferSize = 2 * 1024 * 1024
@@ -439,18 +592,15 @@ class MainActivity : AppCompatActivity() {
     private fun clearSegmentCache() {
         activeRecording?.close()
         activeRecording = null
-        segmentFiles.forEach { it.delete() }
-        segmentFiles.clear()
+        synchronized(segmentLock) {
+            segmentFiles.forEach { it.delete() }
+            segmentFiles.clear()
+        }
 
         val dir = getSegmentsDirectory()
         if (dir.exists()) {
             dir.listFiles()?.forEach { it.delete() }
         }
-    }
-
-    private fun getOutputDirectory(): File {
-        val movieDir = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
-        return movieDir ?: filesDir
     }
 
     private fun getPublicReplayPathLabel(): String {
@@ -478,7 +628,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        unregisterReceiver(batteryReceiver)
         clearSegmentCache()
+        rtmpStreamEngine?.close()
         cameraExecutor.shutdown()
     }
 }

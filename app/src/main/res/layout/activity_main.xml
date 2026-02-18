@@ -15,6 +15,14 @@
         app:layout_constraintTop_toTopOf="parent"
         app:scaleType="fillCenter" />
 
+    <SurfaceView
+        android:id="@+id/streamSurface"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:visibility="invisible"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
     <LinearLayout
         android:id="@+id/controlContainer"
         android:layout_width="0dp"
@@ -46,6 +54,14 @@
             android:layout_height="wrap_content"
             android:layout_marginBottom="8dp"
             android:text="@string/open_video_folder" />
+
+        <Button
+            android:id="@+id/toggleLiveButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:backgroundTint="@android:color/darker_gray"
+            android:text="@string/live_off" />
 
         <Button
             android:id="@+id/startButton"

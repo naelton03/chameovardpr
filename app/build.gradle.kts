@@ -58,4 +58,10 @@ dependencies {
     add("implementation", "androidx.camera:camera-lifecycle:$cameraxVersion")
     add("implementation", "androidx.camera:camera-video:$cameraxVersion")
     add("implementation", "androidx.camera:camera-view:$cameraxVersion")
+
+    add("implementation", "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    add("implementation", "com.google.android.gms:play-services-auth:21.2.0")
+    add("implementation", "com.google.api-client:google-api-client-android:2.6.0")
+    add("implementation", "com.google.apis:google-api-services-youtube:v3-rev20240814-2.0.0")
+    add("implementation", "com.github.pedroSG94.rtmp-rtsp-stream-client-java:library:2.4.5")
 }
