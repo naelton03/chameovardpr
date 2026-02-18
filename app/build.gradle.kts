@@ -59,6 +59,7 @@ dependencies {
     add("implementation", "androidx.camera:camera-video:$cameraxVersion")
     add("implementation", "androidx.camera:camera-view:$cameraxVersion")
     add("implementation", "androidx.media:media:1.6.0")
+    add("implementation", "com.google.android.gms:play-services-auth:21.2.0")
 
  
 }
