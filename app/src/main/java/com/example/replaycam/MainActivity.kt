@@ -102,9 +102,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val account = youtubeLiveHandler.parseSignInResult(result.data)
+        val parsedAccount = youtubeLiveHandler.parseSignInResult(result.data)
+        val fallbackAccount = GoogleSignIn.getLastSignedInAccount(this)
+        val account = parsedAccount ?: fallbackAccount
+
         if (account != null) {
             signedAccount = account
+            ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_RESULT", "conta recebida com sucesso")
             lifecycleScope.launch {
                 startLiveFlow(account)
             }

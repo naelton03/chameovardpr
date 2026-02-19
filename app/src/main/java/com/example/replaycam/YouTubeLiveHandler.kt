@@ -7,6 +7,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.HttpRequestInitializer
@@ -59,7 +60,17 @@ class YouTubeLiveHandler(private val context: Context) {
 
     fun parseSignInResult(data: Intent?): GoogleSignInAccount? {
         val task = GoogleSignIn.getSignedInAccountFromIntent(data)
-        return if (task.isSuccessful) task.result else null
+        return try {
+            task.getResult(ApiException::class.java)
+        } catch (error: ApiException) {
+            Log.w(tag, "Google Sign-In parse falhou. statusCode=${error.statusCode}", error)
+            ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
+            null
+        } catch (error: Exception) {
+            Log.w(tag, "Google Sign-In parse falhou", error)
+            ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
+            null
+        }
     }
 
     fun isAuthenticated(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
