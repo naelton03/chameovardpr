@@ -34,6 +34,7 @@ class RtmpStreamEngine(
 
         override fun onConnectionFailed(reason: String) {
             isConnected.set(false)
+            Log.e(tag, "RTMP connection failed. reason=$reason")
             callbacks.onConnectionFailed(reason)
             maybeRetry()
         }
@@ -57,6 +58,7 @@ class RtmpStreamEngine(
     fun startStream(endpoint: String) {
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
+            configureNetworkBufferIfSupported()
             rtmpCamera.replaceView(openGlView)
             if (!rtmpCamera.isOnPreview) {
                 Log.w(tag, "Preview RTMP não estava ativo. Iniciando preview antes do stream")
@@ -71,6 +73,7 @@ class RtmpStreamEngine(
             }
 
             rtmpCamera.startStream(endpoint)
+            rtmpCamera.setVideoBitrateOnFly(5_000_000)
             isConnected.set(true)
             Log.i(tag, "RTMP stream started")
         }.onFailure { error ->
@@ -103,10 +106,30 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        return rtmpCamera.prepareVideo(1280, 720, 2_500_000)
+        return rtmpCamera.prepareVideo(1280, 720, 5_000_000)
     }
 
     private fun maybeRetry() {
         Log.e("RtmpStreamEngine", "Conexão perdida")
+    }
+
+    private fun configureNetworkBufferIfSupported() {
+        val candidates = listOf("setSocketSendBuffer", "setSocketBufferSize", "setBufferSize")
+        for (name in candidates) {
+            val method = rtmpCamera.javaClass.methods.firstOrNull {
+                it.name == name && it.parameterTypes.size == 1 &&
+                    (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+            } ?: continue
+
+            runCatching {
+                method.invoke(rtmpCamera, 512 * 1024)
+                Log.i(tag, "Network buffer configurado via $name")
+            }.onFailure { error ->
+                Log.w(tag, "Falha ao configurar buffer via $name: ${error.message}")
+            }
+            return
+        }
+
+        Log.i(tag, "API de ajuste de buffer não disponível nesta versão; mantendo padrão da biblioteca")
     }
 }
