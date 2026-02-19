@@ -22,6 +22,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import android.widget.ArrayAdapter
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -67,7 +68,7 @@ class MainActivity : AppCompatActivity() {
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
 
-    private lateinit var youtubeLiveHandler: YouTubeLiveHandler
+    private var youtubeLiveHandler: YouTubeLiveHandler? = null
     private var rtmpStreamEngine: RtmpStreamEngine? = null
     private var signedAccount: GoogleSignInAccount? = null
     private var activeLiveSession: LiveSessionInfo? = null
@@ -123,13 +124,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val parsedAccount = youtubeLiveHandler.parseSignInResult(result.data)
+        if (!FeatureToggles.isLiveEnabled) return@registerForActivityResult
+
+        val liveHandler = youtubeLiveHandler ?: return@registerForActivityResult
+        val parsedAccount = liveHandler.parseSignInResult(result.data)
         val fallbackAccount = GoogleSignIn.getLastSignedInAccount(this)
         val account = parsedAccount ?: fallbackAccount
 
         if (account != null) {
             signedAccount = account
-            val idToken = youtubeLiveHandler.lastIdToken ?: account.idToken
+            val idToken = liveHandler.lastIdToken ?: account.idToken
             if (idToken.isNullOrBlank()) {
                 appendDiagnosticLog("Google Sign-In concluído sem idToken. Verifique google_web_client_id (Web Client).")
                 ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_ID_TOKEN", "idToken ausente")
@@ -143,7 +147,7 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        val signInStatusCode = youtubeLiveHandler.lastSignInStatusCode
+        val signInStatusCode = liveHandler.lastSignInStatusCode
         if (result.resultCode == RESULT_CANCELED && signInStatusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
             Log.w(tag, "Google login cancelado pelo usuário")
             appendDiagnosticLog("Google Sign-In cancelado pelo usuário")
@@ -151,13 +155,13 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        val hint = youtubeLiveHandler.signInErrorHint(signInStatusCode)
+        val hint = liveHandler.signInErrorHint(signInStatusCode)
         Log.e(tag, "Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode hint=$hint")
         appendDiagnosticLog("Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode hint=$hint")
         if (signInStatusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
-            val oauthDebugInfo = youtubeLiveHandler.oauthDebugInfo()
+            val oauthDebugInfo = liveHandler.oauthDebugInfo()
             appendDiagnosticLog("GOOGLE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
-            appendDiagnosticLog(youtubeLiveHandler.oauthSetupChecklist())
+            appendDiagnosticLog(liveHandler.oauthSetupChecklist())
             status("Erro OAuth (10): ajuste package/SHA-1/SHA-256 no Google Cloud")
             toast(getString(R.string.oauth_developer_error))
         } else {
@@ -194,8 +198,10 @@ class MainActivity : AppCompatActivity() {
         ensureRootLogPermission()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
-        youtubeLiveHandler = YouTubeLiveHandler(this)
-        rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
+        if (FeatureToggles.isLiveEnabled) {
+            youtubeLiveHandler = YouTubeLiveHandler(this)
+            rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
+        }
         signedAccount = GoogleSignIn.getLastSignedInAccount(this)
 
         binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording() } }
@@ -203,8 +209,7 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
         binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
-        setupLiveConfigUi()
-        updateLiveButtonUi(false)
+        configureLiveUi()
         updateVideoPathLabel()
         clearSegmentCache()
 
@@ -215,6 +220,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }
+
+    private fun configureLiveUi() {
+        if (!FeatureToggles.isLiveEnabled) {
+            binding.liveConfigContainer.visibility = View.GONE
+            binding.toggleLiveButton.visibility = View.GONE
+            binding.streamSurface.visibility = View.GONE
+            return
+        }
+
+        binding.liveConfigContainer.visibility = View.VISIBLE
+        binding.toggleLiveButton.visibility = View.VISIBLE
+        binding.streamSurface.visibility = View.VISIBLE
+        setupLiveConfigUi()
+        updateLiveButtonUi(false)
     }
 
     private val streamCallbacks = object : RtmpStreamEngine.Callbacks {
@@ -243,9 +263,10 @@ class MainActivity : AppCompatActivity() {
                     status("Status: mídia detectada, verificando transição no YouTube...")
                 }
 
-                val transitioned = youtubeLiveHandler.transitionBroadcastToLive(
+                val liveHandler = youtubeLiveHandler ?: return@launch
+                val transitioned = liveHandler.transitionBroadcastToLive(
                     account = account,
-                    idToken = youtubeLiveHandler.lastIdToken ?: account.idToken,
+                    idToken = liveHandler.lastIdToken ?: account.idToken,
                     broadcastId = session.broadcastId
                 )
 
@@ -314,7 +335,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleLiveToggleClick() {
+        if (!FeatureToggles.isLiveEnabled) return
+
         val streamer = rtmpStreamEngine ?: return
+        val liveHandler = youtubeLiveHandler ?: return
 
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
@@ -328,10 +352,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (signedAccount == null && !youtubeLiveHandler.isAuthenticated()) {
+        if (signedAccount == null && !liveHandler.isAuthenticated()) {
             toast(getString(R.string.live_requires_auth))
             Log.i(tag, "Iniciando fluxo OAuth Google Sign-In")
-            signInLauncher.launch(youtubeLiveHandler.authIntent())
+            signInLauncher.launch(liveHandler.authIntent())
             return
         }
 
@@ -341,6 +365,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun startLiveFlow(account: GoogleSignInAccount?) {
+        if (!FeatureToggles.isLiveEnabled) return
+
+        val liveHandler = youtubeLiveHandler ?: return
         val safeAccount = account ?: run {
             toast(getString(R.string.live_requires_auth))
             return
@@ -361,9 +388,9 @@ class MainActivity : AppCompatActivity() {
         val privacyStatus = selectedPrivacyStatus()
 
         runCatching {
-            activeLiveSession ?: youtubeLiveHandler.createLiveSession(
+            activeLiveSession ?: liveHandler.createLiveSession(
                 safeAccount,
-                youtubeLiveHandler.lastIdToken ?: safeAccount.idToken,
+                liveHandler.lastIdToken ?: safeAccount.idToken,
                 liveTitle,
                 privacyStatus
             )
@@ -397,12 +424,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateLiveButtonUi(isLive: Boolean) {
+        if (!FeatureToggles.isLiveEnabled) return
         binding.toggleLiveButton.text = if (isLive) getString(R.string.live_on) else getString(R.string.live_off)
         val color = if (isLive) android.R.color.holo_red_dark else android.R.color.darker_gray
         binding.toggleLiveButton.setBackgroundColor(ContextCompat.getColor(this, color))
     }
 
     private fun setupLiveConfigUi() {
+        if (!FeatureToggles.isLiveEnabled) return
         val privacyOptions = listOf(
             getString(R.string.privacy_public),
             getString(R.string.privacy_unlisted),
@@ -415,11 +444,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectedLiveTitle(): String {
+        if (!FeatureToggles.isLiveEnabled) return getString(R.string.default_live_title)
         val typed = binding.liveTitleInput.text?.toString()?.trim().orEmpty()
         return typed.ifBlank { getString(R.string.default_live_title) }
     }
 
     private fun selectedPrivacyStatus(): String {
+        if (!FeatureToggles.isLiveEnabled) return getString(R.string.privacy_unlisted)
         return binding.privacySpinner.selectedItem?.toString()?.trim().orEmpty().ifBlank {
             getString(R.string.privacy_unlisted)
         }
