@@ -246,23 +246,21 @@ class YouTubeLiveHandler(private val context: Context) {
         return createLiveStreamWithIngestionType(
             youtube = youtube,
             snippet = snippet,
-            contentDetails = contentDetails,
-            ingestionType = "rtmps"
+            contentDetails = contentDetails
         )
     }
 
     private fun createLiveStreamWithIngestionType(
         youtube: YouTube,
         snippet: LiveStreamSnippet,
-        contentDetails: LiveStreamContentDetails,
-        ingestionType: String
+        contentDetails: LiveStreamContentDetails
     ): LiveStream {
         val cdnSettings = CdnSettings()
-        cdnSettings.ingestionType = ingestionType
-        cdnSettings.resolution = "720p"
-        cdnSettings.frameRate = "30fps"
+        cdnSettings.setIngestionType("rtmps")
+        cdnSettings.setResolution("720p")
+        cdnSettings.setFrameRate("30fps")
 
-        Log.i(tag, "Creating YouTube liveStream (ingestionType=$ingestionType, 720p/30fps)")
+        Log.i(tag, "Creating YouTube liveStream (ingestionType=rtmps, 720p/30fps)")
         return youtube.liveStreams()
             .insert(mutableListOf("snippet", "cdn", "contentDetails"), LiveStream().apply {
                 this.snippet = snippet
