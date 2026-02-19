@@ -102,25 +102,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode != RESULT_OK) {
+        val account = youtubeLiveHandler.parseSignInResult(result.data)
+        if (account != null) {
+            signedAccount = account
+            lifecycleScope.launch {
+                startLiveFlow(account)
+            }
+            return@registerForActivityResult
+        }
+
+        if (result.resultCode == RESULT_CANCELED) {
             Log.w(tag, "Google login cancelado pelo usuário")
             appendDiagnosticLog("Google Sign-In cancelado pelo usuário")
             toast("Login Google cancelado")
             return@registerForActivityResult
         }
 
-        val account = youtubeLiveHandler.parseSignInResult(result.data)
-        if (account == null) {
-            Log.e(tag, "Falha ao parsear resultado do Google Sign-In")
-            appendDiagnosticLog("Falha ao parsear resultado do Google Sign-In")
-            toast("Falha ao autenticar no Google")
-            return@registerForActivityResult
-        }
-
-        signedAccount = account
-        lifecycleScope.launch {
-            startLiveFlow(account)
-        }
+        Log.e(tag, "Falha ao parsear resultado do Google Sign-In. resultCode=${result.resultCode}")
+        appendDiagnosticLog("Falha ao parsear resultado do Google Sign-In. resultCode=${result.resultCode}")
+        toast("Falha ao autenticar no Google")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
