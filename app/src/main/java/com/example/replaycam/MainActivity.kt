@@ -404,7 +404,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildRtmpEndpoint(ingestionAddress: String, streamName: String): String {
-        val server = ingestionAddress.trim().trimEnd('/').replaceFirst("rtmps://", "rtmp://")
+        val server = ingestionAddress.trim().trimEnd('/')
         val key = streamName.trim().trimStart('/')
         return "$server/$key"
     }

@@ -257,13 +257,20 @@ class YouTubeLiveHandler(private val context: Context) {
                 Log.i(
                     tag,
                     "Aguardando broadcast ficar pronto (tentativa ${attempt + 1}/$maxAttempts): " +
-                        "lifecycle=${status.broadcastLifeCycleStatus}, stream=${status.streamStatus}"
+                        "lifecycle=${status.broadcastLifeCycleStatus}, stream=${status.streamStatus}, health=${status.streamHealthStatus}"
                 )
                 ErrorFileLogger.logInfo(
                     context,
                     "YOUTUBE_LIVE_STATUS_POLL",
-                    "attempt=${attempt + 1}/$maxAttempts lifecycle=${status.broadcastLifeCycleStatus} stream=${status.streamStatus}"
+                    "attempt=${attempt + 1}/$maxAttempts lifecycle=${status.broadcastLifeCycleStatus} stream=${status.streamStatus} health=${status.streamHealthStatus}"
                 )
+                if (status.configurationIssueSummary.isNotBlank()) {
+                    ErrorFileLogger.logInfo(
+                        context,
+                        "YOUTUBE_STREAM_HEALTH_ISSUES",
+                        status.configurationIssueSummary
+                    )
+                }
 
                 if (status.broadcastLifeCycleStatus == "live") {
                     Log.i(tag, "Broadcast já está em LIVE.")
@@ -274,7 +281,7 @@ class YouTubeLiveHandler(private val context: Context) {
                     ErrorFileLogger.logInfo(
                         context,
                         "YOUTUBE_LIVE_WAITING_STREAM",
-                        "streamStatus=${status.streamStatus.ifBlank { "vazio" }}; aguardando ${pollDelayMs}ms"
+                        "streamStatus=${status.streamStatus.ifBlank { "vazio" }} health=${status.streamHealthStatus.ifBlank { "vazio" }}; aguardando ${pollDelayMs}ms"
                     )
                     delay(pollDelayMs)
                     return@repeat
@@ -343,29 +350,42 @@ class YouTubeLiveHandler(private val context: Context) {
         val broadcastLifeCycleStatus = broadcast.status?.lifeCycleStatus.orEmpty()
         val streamId = broadcast.contentDetails?.boundStreamId.orEmpty()
 
-        val streamStatus = if (streamId.isBlank()) {
-            ""
-        } else {
-            youtube.liveStreams()
+        var streamStatus = ""
+        var streamHealthStatus = ""
+        var configurationIssueSummary = ""
+
+        if (streamId.isNotBlank()) {
+            val stream = youtube.liveStreams()
                 .list(mutableListOf("id", "status"))
                 .setId(mutableListOf(streamId))
                 .execute()
                 .items
                 ?.firstOrNull()
-                ?.status
-                ?.streamStatus
+
+            streamStatus = stream?.status?.streamStatus.orEmpty()
+            streamHealthStatus = stream?.status?.healthStatus?.status.orEmpty()
+            configurationIssueSummary = stream?.status?.healthStatus?.configurationIssues
+                ?.joinToString(" | ") { issue ->
+                    val reason = issue.reason.orEmpty()
+                    val description = issue.description.orEmpty()
+                    "reason=$reason description=$description"
+                }
                 .orEmpty()
         }
 
         return BroadcastRuntimeStatus(
             broadcastLifeCycleStatus = broadcastLifeCycleStatus,
-            streamStatus = streamStatus
+            streamStatus = streamStatus,
+            streamHealthStatus = streamHealthStatus,
+            configurationIssueSummary = configurationIssueSummary
         )
     }
 
     private data class BroadcastRuntimeStatus(
         val broadcastLifeCycleStatus: String,
-        val streamStatus: String
+        val streamStatus: String,
+        val streamHealthStatus: String,
+        val configurationIssueSummary: String
     )
 
     private fun createLiveStream(youtube: YouTube): LiveStream {
