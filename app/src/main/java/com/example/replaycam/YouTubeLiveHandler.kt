@@ -30,6 +30,7 @@ import com.google.api.services.youtube.model.LiveStreamContentDetails
 import com.google.api.services.youtube.model.LiveStreamSnippet
 import com.google.api.services.youtube.model.MonitorStreamInfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
@@ -198,11 +199,12 @@ class YouTubeLiveHandler(private val context: Context) {
             selectedAccount = account.account
         }
 
+        if (!idToken.isNullOrBlank()) {
+            Log.i(tag, "idToken recebido no sign-in, mas autenticação YouTube usa access token OAuth2 do GoogleAccountCredential.")
+        }
+
         val initializer = HttpRequestInitializer { request ->
             credential.initialize(request)
-            if (!idToken.isNullOrBlank()) {
-                request.headers.authorization = "Bearer $idToken"
-            }
             request.connectTimeout = 20_000
             request.readTimeout = 20_000
         }
@@ -244,40 +246,147 @@ class YouTubeLiveHandler(private val context: Context) {
     suspend fun transitionBroadcastToLive(
         account: GoogleSignInAccount,
         idToken: String?,
-        broadcastId: String
-    ) = withContext(Dispatchers.IO) {
+        broadcastId: String,
+        maxAttempts: Int = 15,
+        pollDelayMs: Long = 4_000
+    ): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val youtube = buildYouTubeService(account, idToken)
-            val transitioned = runCatching {
-                youtube.liveBroadcasts()
-                    .transition("testing", broadcastId, mutableListOf("id", "status", "snippet"))
-                    .execute()
-                Log.d("YT_API", "Comando de transição para TESTING enviado!")
-                true
-            }.getOrElse { error ->
-                val googleError = error as? GoogleJsonResponseException
-                val reason = googleError?.details?.errors?.firstOrNull()?.reason
-                if (reason == "invalidTransition") {
-                    Log.i(tag, "Transição para TESTING não aplicável (reason=invalidTransition). Seguindo para LIVE.")
-                    false
-                } else {
-                    throw error
+            repeat(maxAttempts) { attempt ->
+                val status = fetchBroadcastRuntimeStatus(youtube, broadcastId)
+                Log.i(
+                    tag,
+                    "Aguardando broadcast ficar pronto (tentativa ${attempt + 1}/$maxAttempts): " +
+                        "lifecycle=${status.broadcastLifeCycleStatus}, stream=${status.streamStatus}, health=${status.streamHealthStatus}"
+                )
+                ErrorFileLogger.logInfo(
+                    context,
+                    "YOUTUBE_LIVE_STATUS_POLL",
+                    "attempt=${attempt + 1}/$maxAttempts lifecycle=${status.broadcastLifeCycleStatus} stream=${status.streamStatus} health=${status.streamHealthStatus}"
+                )
+                if (status.configurationIssueSummary.isNotBlank()) {
+                    ErrorFileLogger.logInfo(
+                        context,
+                        "YOUTUBE_STREAM_HEALTH_ISSUES",
+                        status.configurationIssueSummary
+                    )
                 }
+
+                if (status.broadcastLifeCycleStatus == "live") {
+                    Log.i(tag, "Broadcast já está em LIVE.")
+                    return@withContext true
+                }
+
+                if (status.streamStatus != "active") {
+                    ErrorFileLogger.logInfo(
+                        context,
+                        "YOUTUBE_LIVE_WAITING_STREAM",
+                        "streamStatus=${status.streamStatus.ifBlank { "vazio" }} health=${status.streamHealthStatus.ifBlank { "vazio" }}; aguardando ${pollDelayMs}ms"
+                    )
+                    delay(pollDelayMs)
+                    return@repeat
+                }
+
+                val transitionedToTesting = runCatching {
+                    youtube.liveBroadcasts()
+                        .transition("testing", broadcastId, mutableListOf("id", "status", "snippet"))
+                        .execute()
+                    Log.d("YT_API", "Comando de transição para TESTING enviado!")
+                    true
+                }.getOrElse { error ->
+                    val googleError = error as? GoogleJsonResponseException
+                    val reason = googleError?.details?.errors?.firstOrNull()?.reason
+                    if (reason == "invalidTransition") {
+                        Log.i(tag, "Transição para TESTING não aplicável (reason=invalidTransition). Seguindo para LIVE.")
+                        ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "transição TESTING não aplicável; tentando LIVE")
+                        false
+                    } else {
+                        throw error
+                    }
+                }
+
+                if (transitionedToTesting) {
+                    delay(2_000)
+                }
+
+                youtube.liveBroadcasts()
+                    .transition("live", broadcastId, mutableListOf("id", "status", "snippet"))
+                    .execute()
+                Log.d("YT_API", "Comando de transição para LIVE enviado!")
+                ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "comando enviado com sucesso")
+
+                val updatedStatus = fetchBroadcastRuntimeStatus(youtube, broadcastId)
+                if (updatedStatus.broadcastLifeCycleStatus == "live") {
+                    Log.i(tag, "Broadcast confirmado em LIVE após transição.")
+                    ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "broadcast confirmado em LIVE")
+                    return@withContext true
+                }
+
+                delay(pollDelayMs)
             }
 
-            if (transitioned) {
-                kotlinx.coroutines.delay(2_000)
-            }
-
-            youtube.liveBroadcasts()
-                .transition("live", broadcastId, mutableListOf("id", "status", "snippet"))
-                .execute()
-            Log.d("YT_API", "Comando de transição para LIVE enviado!")
+            ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "timeout aguardando broadcast entrar em LIVE")
+            false
         }.onFailure { error ->
-            Log.e(tag, "Falha ao enviar transição para LIVE", error)
+            val googleError = error as? GoogleJsonResponseException
+            val reason = googleError?.details?.errors?.firstOrNull()?.reason
+            Log.e(tag, "Falha ao enviar transição para LIVE reason=$reason", error)
             ErrorFileLogger.logError(context, "YOUTUBE_TRANSITION_LIVE", error)
-        }
+            if (!reason.isNullOrBlank()) {
+                ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE_REASON", reason)
+            }
+        }.getOrDefault(false)
     }
+
+    private fun fetchBroadcastRuntimeStatus(youtube: YouTube, broadcastId: String): BroadcastRuntimeStatus {
+        val broadcast = youtube.liveBroadcasts()
+            .list(mutableListOf("id", "status", "contentDetails"))
+            .setId(mutableListOf(broadcastId))
+            .execute()
+            .items
+            ?.firstOrNull()
+            ?: error("Broadcast $broadcastId não encontrado")
+
+        val broadcastLifeCycleStatus = broadcast.status?.lifeCycleStatus.orEmpty()
+        val streamId = broadcast.contentDetails?.boundStreamId.orEmpty()
+
+        var streamStatus = ""
+        var streamHealthStatus = ""
+        var configurationIssueSummary = ""
+
+        if (streamId.isNotBlank()) {
+            val stream = youtube.liveStreams()
+                .list(mutableListOf("id", "status"))
+                .setId(mutableListOf(streamId))
+                .execute()
+                .items
+                ?.firstOrNull()
+
+            streamStatus = stream?.status?.streamStatus.orEmpty()
+            streamHealthStatus = stream?.status?.healthStatus?.status.orEmpty()
+            configurationIssueSummary = stream?.status?.healthStatus?.configurationIssues
+                ?.joinToString(" | ") { issue ->
+                    val reason = issue.reason.orEmpty()
+                    val description = issue.description.orEmpty()
+                    "reason=$reason description=$description"
+                }
+                .orEmpty()
+        }
+
+        return BroadcastRuntimeStatus(
+            broadcastLifeCycleStatus = broadcastLifeCycleStatus,
+            streamStatus = streamStatus,
+            streamHealthStatus = streamHealthStatus,
+            configurationIssueSummary = configurationIssueSummary
+        )
+    }
+
+    private data class BroadcastRuntimeStatus(
+        val broadcastLifeCycleStatus: String,
+        val streamStatus: String,
+        val streamHealthStatus: String,
+        val configurationIssueSummary: String
+    )
 
     private fun createLiveStream(youtube: YouTube): LiveStream {
         val snippet = LiveStreamSnippet().apply {

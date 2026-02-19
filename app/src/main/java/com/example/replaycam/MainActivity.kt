@@ -72,6 +72,8 @@ class MainActivity : AppCompatActivity() {
     private var signedAccount: GoogleSignInAccount? = null
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
+    private var transitionRequestedAfterMediaFlow = false
+    private var hasRetriedWithPlainRtmp = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
@@ -219,24 +221,53 @@ class MainActivity : AppCompatActivity() {
         override fun onConnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_CONNECTED", "RTMP conectado")
             transitionToLiveJob?.cancel()
+            transitionRequestedAfterMediaFlow = false
+            runOnUiThread {
+                updateLiveButtonUi(true)
+                status("Status: RTMP conectado; aguardando envio de mídia...")
+            }
+        }
+
+        override fun onMediaFlowing(bitrate: Long) {
+            if (transitionRequestedAfterMediaFlow) return
+            transitionRequestedAfterMediaFlow = true
+            ErrorFileLogger.logInfo(this@MainActivity, "LIVE_MEDIA_FLOW", "bitrate=$bitrate")
+
+            transitionToLiveJob?.cancel()
             transitionToLiveJob = lifecycleScope.launch {
-                delay(3_000)
+                delay(1_000)
                 val session = activeLiveSession ?: return@launch
                 val account = signedAccount ?: GoogleSignIn.getLastSignedInAccount(this@MainActivity) ?: return@launch
-                youtubeLiveHandler.transitionBroadcastToLive(
+
+                withContext(Dispatchers.Main) {
+                    status("Status: mídia detectada, verificando transição no YouTube...")
+                }
+
+                val transitioned = youtubeLiveHandler.transitionBroadcastToLive(
                     account = account,
                     idToken = youtubeLiveHandler.lastIdToken ?: account.idToken,
                     broadcastId = session.broadcastId
                 )
-            }
-            runOnUiThread {
-                updateLiveButtonUi(true)
-                status("Status: live conectada")
+
+                withContext(Dispatchers.Main) {
+                    if (transitioned) {
+                        status("Status: ao vivo no YouTube")
+                    } else {
+                        val fallbackApplied = retryWithPlainRtmpIfNeeded()
+                        transitionRequestedAfterMediaFlow = false
+                        if (fallbackApplied) {
+                            status("Status: retry automático em RTMP (sem TLS) aplicado; aguardando mídia...")
+                        } else {
+                            status("Status: mídia enviada, YouTube ainda em 'programado' (ver logs YOUTUBE_LIVE_*)")
+                        }
+                    }
+                }
             }
         }
 
         override fun onDisconnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_DISCONNECTED", "RTMP desconectado")
+            transitionRequestedAfterMediaFlow = false
             transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
@@ -246,6 +277,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onConnectionFailed(reason: String) {
             ErrorFileLogger.logError(this@MainActivity, "LIVE_CONNECTION_FAILED", IllegalStateException(reason))
+            transitionRequestedAfterMediaFlow = false
             transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
@@ -286,6 +318,8 @@ class MainActivity : AppCompatActivity() {
 
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
+            transitionRequestedAfterMediaFlow = false
+            hasRetriedWithPlainRtmp = false
             transitionToLiveJob?.cancel()
             streamer.stopStream()
             activeLiveSession = null
@@ -336,6 +370,7 @@ class MainActivity : AppCompatActivity() {
         }.onSuccess { session ->
             signedAccount = safeAccount
             activeLiveSession = session
+            hasRetriedWithPlainRtmp = false
             val endpoint = buildRtmpEndpoint(session.rtmpServerUrl, session.streamKey)
             Log.i(tag, "Sessão ativa broadcast=${session.broadcastId} stream=${session.streamId}")
             Log.i(tag, "Stream key desta sessão (prefixo)=${session.streamKey.take(6)}...")
@@ -391,9 +426,27 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildRtmpEndpoint(ingestionAddress: String, streamName: String): String {
-        val server = ingestionAddress.trim().trimEnd('/').replaceFirst("rtmps://", "rtmp://")
+        val server = ingestionAddress.trim().trimEnd('/')
         val key = streamName.trim().trimStart('/')
         return "$server/$key"
+    }
+
+    private fun retryWithPlainRtmpIfNeeded(): Boolean {
+        val session = activeLiveSession ?: return false
+        if (hasRetriedWithPlainRtmp) return false
+        if (!session.rtmpServerUrl.startsWith("rtmps://", ignoreCase = true)) return false
+
+        val streamer = rtmpStreamEngine ?: return false
+        hasRetriedWithPlainRtmp = true
+
+        val fallbackServer = session.rtmpServerUrl.replaceFirst("rtmps://", "rtmp://")
+        val fallbackEndpoint = buildRtmpEndpoint(fallbackServer, session.streamKey)
+        ErrorFileLogger.logInfo(this, "LIVE_RTMP_FALLBACK", "Aplicando fallback para endpoint=$fallbackEndpoint")
+        Log.w(tag, "Aplicando fallback RTMP sem TLS para tentar ativar ingestão YouTube")
+
+        streamer.stopStream()
+        streamer.startStream(fallbackEndpoint)
+        return true
     }
 
     private fun allPermissionsGranted(): Boolean {
