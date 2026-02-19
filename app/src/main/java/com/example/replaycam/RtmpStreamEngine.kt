@@ -28,30 +28,30 @@ class RtmpStreamEngine(
                 Log.i(tag, "RTMP connection started url=$url")
             }
 
-            override fun onConnectionSuccess() {
+            override fun onConnectionSuccessRtmp() {
                 retryCount = 0
                 isConnected.set(true)
                 callbacks.onConnected()
             }
 
-            override fun onConnectionFailed(reason: String) {
+            override fun onConnectionFailedRtmp(reason: String) {
                 isConnected.set(false)
                 callbacks.onConnectionFailed(reason)
                 maybeRetry(reason)
             }
 
-            override fun onNewBitrate(bitrate: Long) = Unit
+            override fun onNewBitrateRtmp(bitrate: Long) = Unit
 
-            override fun onDisconnect() {
+            override fun onDisconnectRtmp() {
                 isConnected.set(false)
                 callbacks.onDisconnected()
             }
 
-            override fun onAuthError() {
+            override fun onAuthErrorRtmp() {
                 callbacks.onAuthError()
             }
 
-            override fun onAuthSuccess() {
+            override fun onAuthSuccessRtmp() {
                 callbacks.onAuthSuccess()
             }
         }).also {
