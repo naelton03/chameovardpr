@@ -33,27 +33,20 @@ import java.util.Locale
 class YouTubeLiveHandler(private val context: Context) {
 
     private val tag = "YouTubeLiveHandler"
+    var lastSignInStatusCode: Int? = null
+        private set
 
     private val signInClient: GoogleSignInClient by lazy {
-        val webClientId = context.resources.getIdentifier(
-            "default_web_client_id",
-            "string",
-            context.packageName
-        ).let { id -> if (id != 0) context.getString(id) else "" }
-
-        val optionsBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+        // Não exigir ID token/serverAuthCode para evitar falhas por configuração do OAuth Web Client.
+        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(
                 Scope(YouTubeScopes.YOUTUBE),
                 Scope(YouTubeScopes.YOUTUBE_FORCE_SSL)
             )
+            .build()
 
-        if (webClientId.isNotBlank()) {
-            optionsBuilder.requestIdToken(webClientId)
-            optionsBuilder.requestServerAuthCode(webClientId, true)
-        }
-
-        GoogleSignIn.getClient(context, optionsBuilder.build())
+        GoogleSignIn.getClient(context, options)
     }
 
     fun authIntent(): Intent = signInClient.signInIntent
@@ -61,12 +54,16 @@ class YouTubeLiveHandler(private val context: Context) {
     fun parseSignInResult(data: Intent?): GoogleSignInAccount? {
         val task = GoogleSignIn.getSignedInAccountFromIntent(data)
         return try {
-            task.getResult(ApiException::class.java)
+            val account = task.getResult(ApiException::class.java)
+            lastSignInStatusCode = null
+            account
         } catch (error: ApiException) {
+            lastSignInStatusCode = error.statusCode
             Log.w(tag, "Google Sign-In parse falhou. statusCode=${error.statusCode}", error)
             ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
             null
         } catch (error: Exception) {
+            lastSignInStatusCode = null
             Log.w(tag, "Google Sign-In parse falhou", error)
             ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
             null

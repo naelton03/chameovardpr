@@ -39,6 +39,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.replaycam.databinding.ActivityMainBinding
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -115,16 +116,17 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        if (result.resultCode == RESULT_CANCELED) {
+        val signInStatusCode = youtubeLiveHandler.lastSignInStatusCode
+        if (result.resultCode == RESULT_CANCELED && signInStatusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
             Log.w(tag, "Google login cancelado pelo usuário")
             appendDiagnosticLog("Google Sign-In cancelado pelo usuário")
             toast("Login Google cancelado")
             return@registerForActivityResult
         }
 
-        Log.e(tag, "Falha ao parsear resultado do Google Sign-In. resultCode=${result.resultCode}")
-        appendDiagnosticLog("Falha ao parsear resultado do Google Sign-In. resultCode=${result.resultCode}")
-        toast("Falha ao autenticar no Google")
+        Log.e(tag, "Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode")
+        appendDiagnosticLog("Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode")
+        toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
