@@ -21,22 +21,32 @@ extensions.configure<ApplicationExtension>("android") {
 
 
     signingConfigs {
-        val keystorePath = providers.gradleProperty("REPLAYCAM_KEYSTORE_PATH")
+        val propertyKeystorePath = providers.gradleProperty("REPLAYCAM_KEYSTORE_PATH")
             .orElse(providers.environmentVariable("REPLAYCAM_KEYSTORE_PATH"))
             .orNull
+        val localStableKeystore = rootProject.file(".keystore/replaycam-oauth.jks")
+        val resolvedKeystorePath = when {
+            !propertyKeystorePath.isNullOrBlank() -> propertyKeystorePath
+            localStableKeystore.exists() -> localStableKeystore.absolutePath
+            else -> null
+        }
+
         val keyAlias = providers.gradleProperty("REPLAYCAM_KEY_ALIAS")
             .orElse(providers.environmentVariable("REPLAYCAM_KEY_ALIAS"))
+            .orElse("replaycamoauth")
             .orNull
         val storePassword = providers.gradleProperty("REPLAYCAM_STORE_PASSWORD")
             .orElse(providers.environmentVariable("REPLAYCAM_STORE_PASSWORD"))
+            .orElse("replaycam123")
             .orNull
         val keyPassword = providers.gradleProperty("REPLAYCAM_KEY_PASSWORD")
             .orElse(providers.environmentVariable("REPLAYCAM_KEY_PASSWORD"))
+            .orElse("replaycam123")
             .orNull
 
-        if (!keystorePath.isNullOrBlank() && !keyAlias.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+        if (!resolvedKeystorePath.isNullOrBlank() && !keyAlias.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
             create("stableOAuth") {
-                storeFile = file(keystorePath)
+                storeFile = file(resolvedKeystorePath)
                 this.keyAlias = keyAlias
                 this.storePassword = storePassword
                 this.keyPassword = keyPassword

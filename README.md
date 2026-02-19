@@ -43,6 +43,10 @@ REPLAYCAM_KEY_PASSWORD=replaycam123
 
 O script imprime os fingerprints SHA-1 e SHA-256 para cadastrar no Google Cloud Console (OAuth Android).
 
+
+> Se o app em execução ainda mostrar outro SHA (ex.: no log `GOOGLE_OAUTH_DEBUG_INFO`), desinstale a versão antiga e reinstale o APK assinado pela keystore estável.
+> Enquanto isso, você pode cadastrar temporariamente esse SHA antigo em um segundo OAuth Android Client para não bloquear login.
+
 ## Build local
 
 ```bash
