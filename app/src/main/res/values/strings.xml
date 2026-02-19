@@ -11,6 +11,7 @@
     <string name="live_on">LIVE ON</string>
     <string name="live_off">LIVE OFF</string>
     <string name="live_requires_auth">Faça login no Google para iniciar a live</string>
+    <string name="oauth_developer_error">Falha OAuth Google (código 10). Corrija package/SHA-1/SHA-256 no Google Cloud Console.</string>
     <string name="live_created">Live RTMP preparada e conectada</string>
     <string name="live_stopped">Live RTMP encerrada</string>
     <string name="temperature_warning">Temperatura alta detectada (%.1f°C). Reduzindo bitrate da live.</string>

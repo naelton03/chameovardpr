@@ -64,7 +64,15 @@ class YouTubeLiveHandler(private val context: Context) {
         } catch (error: ApiException) {
             lastSignInStatusCode = error.statusCode
             Log.w(tag, "Google Sign-In parse falhou. statusCode=${error.statusCode}", error)
-            ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
+            if (error.statusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
+                ErrorFileLogger.logInfo(
+                    context,
+                    "GOOGLE_SIGN_IN_PARSE",
+                    "DEVELOPER_ERROR (10) detectado. Verifique OAuth Android: ${oauthDebugInfo()}"
+                )
+            } else {
+                ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
+            }
             null
         } catch (error: Exception) {
             lastSignInStatusCode = null
@@ -85,6 +93,17 @@ class YouTubeLiveHandler(private val context: Context) {
             null -> "Falha ao obter retorno do Google Sign-In."
             else -> "Falha Google Sign-In. statusCode=$statusCode"
         }
+    }
+
+    fun oauthSetupChecklist(): String {
+        return """
+            Checklist OAuth Android:
+            1) Google Cloud Console > APIs & Services > Credentials > Create credentials > OAuth client ID > Android.
+            2) Use packageName exatamente como no app.
+            3) Cadastre SHA-1 e SHA-256 do APK instalado.
+            4) Verifique se a YouTube Data API v3 está ativada no mesmo projeto.
+            5) Reinstale o app após ajustar credenciais.
+        """.trimIndent()
     }
 
     fun oauthDebugInfo(): String {

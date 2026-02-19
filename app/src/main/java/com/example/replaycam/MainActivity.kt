@@ -143,7 +143,9 @@ class MainActivity : AppCompatActivity() {
         if (signInStatusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
             val oauthDebugInfo = youtubeLiveHandler.oauthDebugInfo()
             appendDiagnosticLog("GOOGLE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
-            toast("Falha OAuth Google (código 10). Corrija package/SHA no Google Cloud.")
+            appendDiagnosticLog(youtubeLiveHandler.oauthSetupChecklist())
+            status("Erro OAuth (10): ajuste package/SHA-1/SHA-256 no Google Cloud")
+            toast(getString(R.string.oauth_developer_error))
         } else {
             toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
         }
