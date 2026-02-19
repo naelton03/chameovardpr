@@ -28,7 +28,6 @@ class RtmpStreamEngine(
         }
 
         override fun onConnectionSuccess() {
-            retryCount = 0
             isConnected.set(true)
             callbacks.onConnected()
         }
@@ -36,7 +35,7 @@ class RtmpStreamEngine(
         override fun onConnectionFailed(reason: String) {
             isConnected.set(false)
             callbacks.onConnectionFailed(reason)
-            maybeRetry(reason)
+            maybeRetry()
         }
 
         override fun onNewBitrate(bitrate: Long) = Unit
@@ -55,8 +54,6 @@ class RtmpStreamEngine(
         }
     }
     private val rtmpCamera: RtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
-    private var retryCount: Int = 0
-
     fun startStream(endpoint: String) {
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
@@ -67,7 +64,6 @@ class RtmpStreamEngine(
                 throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
             }
 
-            retryCount = 0
             rtmpCamera.startStream(endpoint)
             isConnected.set(true)
             Log.i(tag, "RTMP stream started")
@@ -104,11 +100,7 @@ class RtmpStreamEngine(
         return rtmpCamera.prepareVideo(1280, 720, 2_500_000)
     }
 
-    private fun maybeRetry(reason: String) {
-        if (retryCount >= 5) return
-        retryCount += 1
-        val delayMs = 1_500L * retryCount
-        callbacks.onRetrying(delayMs, reason)
-        rtmpCamera.retry(delayMs)
+    private fun maybeRetry() {
+        Log.e("RtmpStreamEngine", "Conexão perdida")
     }
 }
