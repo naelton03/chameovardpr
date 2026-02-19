@@ -256,11 +256,11 @@ class YouTubeLiveHandler(private val context: Context) {
         contentDetails: LiveStreamContentDetails
     ): LiveStream {
         val cdnSettings = CdnSettings()
-        cdnSettings.setIngestionType("rtmps")
+        cdnSettings.setIngestionType("rtmp")
         cdnSettings.setResolution("720p")
         cdnSettings.setFrameRate("30fps")
 
-        Log.i(tag, "Creating YouTube liveStream (ingestionType=rtmps, 720p/30fps)")
+        Log.i(tag, "Creating YouTube liveStream (ingestionType=rtmp, 720p/30fps)")
         return youtube.liveStreams()
             .insert(mutableListOf("snippet", "cdn", "contentDetails"), LiveStream().apply {
                 this.snippet = snippet
