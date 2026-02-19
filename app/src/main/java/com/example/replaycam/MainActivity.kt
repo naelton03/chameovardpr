@@ -43,6 +43,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -321,6 +322,9 @@ class MainActivity : AppCompatActivity() {
             activeLiveSession = session
             val endpoint = buildRtmpEndpoint(session.rtmpServerUrl, session.streamKey)
             Log.i(tag, "Sessão ativa broadcast=${session.broadcastId} stream=${session.streamId}")
+            Log.i(tag, "Stream key desta sessão (prefixo)=${session.streamKey.take(6)}...")
+            Log.d("RTMP_DEBUG", "URL Final: $endpoint")
+            delay(1_500)
             Log.i(tag, "Iniciando envio RTMP para endpoint=$endpoint")
             rtmpStreamEngine?.startStream(endpoint)
             withContext(Dispatchers.Main) {
