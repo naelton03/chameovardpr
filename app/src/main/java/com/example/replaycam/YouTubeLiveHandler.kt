@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import com.example.replaycam.R
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
@@ -36,21 +37,35 @@ import java.util.Locale
 
 class YouTubeLiveHandler(private val context: Context) {
 
+    private companion object {
+        private const val REQUIRED_WEB_CLIENT_ID = "698685113444-d1926mfoqamcqehcp5bug9423ql8p1fg.apps.googleusercontent.com"
+    }
+
     private val tag = "YouTubeLiveHandler"
     var lastSignInStatusCode: Int? = null
         private set
+    var lastIdToken: String? = null
+        private set
 
     private val signInClient: GoogleSignInClient by lazy {
-        // Não exigir ID token/serverAuthCode para evitar falhas por configuração do OAuth Web Client.
-        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+        val resourceWebClientId = context.getString(R.string.google_web_client_id).trim()
+        val webClientId = resourceWebClientId.ifBlank { REQUIRED_WEB_CLIENT_ID }
+        val optionsBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(
-                Scope(YouTubeScopes.YOUTUBE),
-                Scope(YouTubeScopes.YOUTUBE_FORCE_SSL)
+                Scope(YouTubeScopes.YOUTUBE_FORCE_SSL),
+                Scope(YouTubeScopes.YOUTUBE)
             )
-            .build()
 
-        GoogleSignIn.getClient(context, options)
+        if (webClientId.isNotBlank()) {
+            optionsBuilder
+                .requestIdToken(webClientId)
+                .requestServerAuthCode(webClientId)
+        } else {
+            Log.w(tag, "google_web_client_id não configurado. ID token/serverAuthCode não serão solicitados.")
+        }
+
+        GoogleSignIn.getClient(context, optionsBuilder.build())
     }
 
     fun authIntent(): Intent = signInClient.signInIntent
@@ -60,14 +75,25 @@ class YouTubeLiveHandler(private val context: Context) {
         return try {
             val account = task.getResult(ApiException::class.java)
             lastSignInStatusCode = null
+            lastIdToken = account.idToken
             account
         } catch (error: ApiException) {
             lastSignInStatusCode = error.statusCode
+            lastIdToken = null
             Log.w(tag, "Google Sign-In parse falhou. statusCode=${error.statusCode}", error)
-            ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
+            if (error.statusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
+                ErrorFileLogger.logInfo(
+                    context,
+                    "GOOGLE_SIGN_IN_PARSE",
+                    "DEVELOPER_ERROR (10) detectado. Verifique OAuth Android: ${oauthDebugInfo()}"
+                )
+            } else {
+                ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
+            }
             null
         } catch (error: Exception) {
             lastSignInStatusCode = null
+            lastIdToken = null
             Log.w(tag, "Google Sign-In parse falhou", error)
             ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
             null
@@ -81,10 +107,25 @@ class YouTubeLiveHandler(private val context: Context) {
             GoogleSignInStatusCodes.DEVELOPER_ERROR -> "Erro 10 (DEVELOPER_ERROR): configure OAuth Android no Google Cloud com packageName e SHA-1/ SHA-256 corretos."
             GoogleSignInStatusCodes.NETWORK_ERROR -> "Sem rede no dispositivo para autenticar no Google."
             GoogleSignInStatusCodes.SIGN_IN_REQUIRED -> "É necessário entrar na conta Google novamente."
+            GoogleSignInStatusCodes.SIGN_IN_FAILED -> "Falha no Google Sign-In (12500). Confirme o OAuth Web Client ID e se seu e-mail está em Usuários de Teste na tela de consentimento OAuth."
             GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> "Login cancelado pelo usuário."
             null -> "Falha ao obter retorno do Google Sign-In."
             else -> "Falha Google Sign-In. statusCode=$statusCode"
         }
+    }
+
+    fun oauthSetupChecklist(): String {
+        return """
+            Checklist OAuth Android:
+            1) Configure OAuth Android com packageName e SHA-1/SHA-256 do APK instalado.
+            2) Configure também um OAuth Web Client e use esse client ID em google_web_client_id.
+            3) Verifique se a YouTube Data API v3 está ativada no projeto replaycam.
+            4) Garanta que o escopo youtube.force-ssl está sendo solicitado.
+            5) Na Tela de Permissão OAuth, adicione seu e-mail em Usuários de Teste (escopo sensível).
+            6) Confirme que o SHA-1 do Google Cloud é o mesmo do APK em execução (GOOGLE_OAUTH_DEBUG_INFO).
+            7) Se trocar ambiente/chave de build debug, atualize o SHA-1 manualmente no Google Cloud.
+            8) Reinstale o app após ajustar credenciais.
+        """.trimIndent()
     }
 
     fun oauthDebugInfo(): String {
@@ -114,11 +155,11 @@ class YouTubeLiveHandler(private val context: Context) {
             .joinToString(":") { "%02X".format(it) }
     }
 
-    suspend fun createLiveSession(account: GoogleSignInAccount): LiveSessionInfo = withContext(Dispatchers.IO) {
+    suspend fun createLiveSession(account: GoogleSignInAccount, idToken: String?): LiveSessionInfo = withContext(Dispatchers.IO) {
         runCatching {
             Log.i(tag, "createLiveSession start for account=${account.email}")
             ErrorFileLogger.logInfo(context, "YOUTUBE_CREATE_LIVE_SESSION", "iniciado para ${account.email}")
-            val youtube = buildYouTubeService(account)
+            val youtube = buildYouTubeService(account, idToken)
             val stream = createLiveStream(youtube)
             val broadcast = createLiveBroadcast(youtube)
             bindBroadcastToStream(youtube, broadcast.id, stream.id)
@@ -138,7 +179,7 @@ class YouTubeLiveHandler(private val context: Context) {
         }.getOrThrow()
     }
 
-    private fun buildYouTubeService(account: GoogleSignInAccount): YouTube {
+    private fun buildYouTubeService(account: GoogleSignInAccount, idToken: String?): YouTube {
         val credential = GoogleAccountCredential.usingOAuth2(
             context,
             listOf(YouTubeScopes.YOUTUBE, YouTubeScopes.YOUTUBE_FORCE_SSL)
@@ -148,6 +189,9 @@ class YouTubeLiveHandler(private val context: Context) {
 
         val initializer = HttpRequestInitializer { request ->
             credential.initialize(request)
+            if (!idToken.isNullOrBlank()) {
+                request.headers.authorization = "Bearer $idToken"
+            }
             request.connectTimeout = 20_000
             request.readTimeout = 20_000
         }

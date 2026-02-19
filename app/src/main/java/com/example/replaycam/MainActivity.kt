@@ -122,6 +122,13 @@ class MainActivity : AppCompatActivity() {
 
         if (account != null) {
             signedAccount = account
+            val idToken = youtubeLiveHandler.lastIdToken ?: account.idToken
+            if (idToken.isNullOrBlank()) {
+                appendDiagnosticLog("Google Sign-In concluído sem idToken. Verifique google_web_client_id (Web Client).")
+                ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_ID_TOKEN", "idToken ausente")
+            } else {
+                ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_ID_TOKEN", "idToken capturado com sucesso")
+            }
             ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_RESULT", "conta recebida com sucesso")
             lifecycleScope.launch {
                 startLiveFlow(account)
@@ -143,9 +150,11 @@ class MainActivity : AppCompatActivity() {
         if (signInStatusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
             val oauthDebugInfo = youtubeLiveHandler.oauthDebugInfo()
             appendDiagnosticLog("GOOGLE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
-            toast("Falha OAuth Google (código 10). Corrija package/SHA no Google Cloud.")
+            appendDiagnosticLog(youtubeLiveHandler.oauthSetupChecklist())
+            status("Erro OAuth (10): ajuste package/SHA-1/SHA-256 no Google Cloud")
+            toast(getString(R.string.oauth_developer_error))
         } else {
-            toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
+            toast(hint)
         }
     }
 
@@ -289,7 +298,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         runCatching {
-            youtubeLiveHandler.createLiveSession(safeAccount)
+            youtubeLiveHandler.createLiveSession(safeAccount, youtubeLiveHandler.lastIdToken ?: safeAccount.idToken)
         }.onSuccess { session ->
             signedAccount = safeAccount
             val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"
