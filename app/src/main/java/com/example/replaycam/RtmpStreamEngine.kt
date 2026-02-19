@@ -26,19 +26,26 @@ class RtmpStreamEngine(
 
     fun startStream(endpoint: String) {
         Log.i(tag, "startStream called endpoint=$endpoint")
-        val instance = cameraInstance ?: createCameraInstance().also { cameraInstance = it }
+        runCatching {
+            val instance = cameraInstance ?: createCameraInstance().also { cameraInstance = it }
 
-        if (!invokeBoolean(instance, "prepareVideo", 1280, 720, 30, 2_500_000, 2, 0)) {
-            throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
-        }
-        if (!invokeBoolean(instance, "prepareAudio")) {
-            throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
-        }
+            if (!invokeBoolean(instance, "prepareVideo", 1280, 720, 30, 2_500_000, 2, 0)) {
+                throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
+            }
+            if (!invokeBoolean(instance, "prepareAudio")) {
+                throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
+            }
 
-        retryCount = 0
-        invoke(instance, "startStream", endpoint)
-        isConnected.set(true)
-        Log.i(tag, "RTMP stream started")
+            retryCount = 0
+            invoke(instance, "startStream", endpoint)
+            isConnected.set(true)
+            Log.i(tag, "RTMP stream started")
+        }.onFailure { error ->
+            isConnected.set(false)
+            val reason = error.message ?: "Falha desconhecida ao iniciar RTMP"
+            Log.e(tag, "startStream falhou: $reason", error)
+            callbacks.onConnectionFailed(reason)
+        }
     }
 
     fun stopStream() {
