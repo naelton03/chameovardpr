@@ -104,6 +104,13 @@ Quando o ambiente não consegue acessar repositórios de build (Maven/Google), o
 
 Se você não passar `owner/repo`, o script tenta inferir automaticamente a partir do `git remote origin` (GitHub HTTPS/SSH).
 
+
+## Dependência RTMP (PedroSG94)
+
+A funcionalidade de live usa classes `RtmpCamera2` e `ConnectCheckerRtmp` da biblioteca PedroSG94.
+Se houver erro `ClassNotFoundException`/`SDK RTMP ausente no APK`, confirme que a dependência
+`com.github.pedroSG94.RootEncoder:library:2.4.5` foi resolvida no build.
+
 ## Pipeline CI (GitHub Actions)
 
 Workflow em `.github/workflows/android-apk.yml`:
