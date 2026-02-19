@@ -172,12 +172,17 @@ class YouTubeLiveHandler(private val context: Context) {
 
             val ingestion = stream.cdn?.ingestionInfo
                 ?: error("YouTube retornou stream sem ingestionInfo")
+            val ingestionAddress = ingestion.ingestionAddress?.trim().orEmpty()
+            val streamName = ingestion.streamName?.trim().orEmpty()
+            require(ingestionAddress.isNotBlank()) { "YouTube retornou ingestionAddress vazio" }
+            require(streamName.isNotBlank()) { "YouTube retornou streamName vazio" }
+            Log.i(tag, "Ingestion recebido address=$ingestionAddress streamName=$streamName")
 
             LiveSessionInfo(
                 broadcastId = broadcast.id,
                 streamId = stream.id,
-                rtmpServerUrl = ingestion.ingestionAddress,
-                streamKey = ingestion.streamName
+                rtmpServerUrl = ingestionAddress,
+                streamKey = streamName
             )
         }.onFailure { error ->
             ErrorFileLogger.logError(context, "YOUTUBE_CREATE_LIVE_SESSION", error)

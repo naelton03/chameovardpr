@@ -319,8 +319,9 @@ class MainActivity : AppCompatActivity() {
         }.onSuccess { session ->
             signedAccount = safeAccount
             activeLiveSession = session
-            val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"
+            val endpoint = buildRtmpEndpoint(session.rtmpServerUrl, session.streamKey)
             Log.i(tag, "Sessão ativa broadcast=${session.broadcastId} stream=${session.streamId}")
+            Log.i(tag, "Iniciando envio RTMP para endpoint=$endpoint")
             rtmpStreamEngine?.startStream(endpoint)
             withContext(Dispatchers.Main) {
                 updateLiveButtonUi(true)
@@ -367,6 +368,12 @@ class MainActivity : AppCompatActivity() {
         return binding.privacySpinner.selectedItem?.toString()?.trim().orEmpty().ifBlank {
             getString(R.string.privacy_unlisted)
         }
+    }
+
+    private fun buildRtmpEndpoint(ingestionAddress: String, streamName: String): String {
+        val server = ingestionAddress.trim().trimEnd('/').replaceFirst("rtmps://", "rtmp://")
+        val key = streamName.trim().trimStart('/')
+        return "$server/$key"
     }
 
     private fun allPermissionsGranted(): Boolean {
