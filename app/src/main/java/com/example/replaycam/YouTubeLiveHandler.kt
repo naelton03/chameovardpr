@@ -231,20 +231,44 @@ class YouTubeLiveHandler(private val context: Context) {
         val snippet = LiveStreamSnippet().apply {
             title = "ReplayCam Stream ${System.currentTimeMillis()}"
         }
-        val cdn = CdnSettings().apply {
-            ingestionType = "rtmps"
-            resolution = "720p"
-            frameRate = "30fps"
-        }
         val contentDetails = LiveStreamContentDetails().apply {
             isReusable = true
         }
 
-        Log.i(tag, "Creating YouTube liveStream (720p/30fps)")
+        return runCatching {
+            createLiveStreamWithIngestionType(
+                youtube = youtube,
+                snippet = snippet,
+                contentDetails = contentDetails,
+                ingestionType = "rtmps"
+            )
+        }.getOrElse { error ->
+            Log.w(tag, "Falha ao criar stream com rtmps. Tentando fallback para rtmp", error)
+            createLiveStreamWithIngestionType(
+                youtube = youtube,
+                snippet = snippet,
+                contentDetails = contentDetails,
+                ingestionType = "rtmp"
+            )
+        }
+    }
+
+    private fun createLiveStreamWithIngestionType(
+        youtube: YouTube,
+        snippet: LiveStreamSnippet,
+        contentDetails: LiveStreamContentDetails,
+        ingestionType: String
+    ): LiveStream {
+        val cdnSettings = CdnSettings()
+        cdnSettings.ingestionType = ingestionType
+        cdnSettings.resolution = "720p"
+        cdnSettings.frameRate = "30fps"
+
+        Log.i(tag, "Creating YouTube liveStream (ingestionType=$ingestionType, 720p/30fps)")
         return youtube.liveStreams()
             .insert(mutableListOf("snippet", "cdn", "contentDetails"), LiveStream().apply {
                 this.snippet = snippet
-                this.cdn = cdn
+                this.cdn = cdnSettings
                 this.contentDetails = contentDetails
             })
             .execute()
