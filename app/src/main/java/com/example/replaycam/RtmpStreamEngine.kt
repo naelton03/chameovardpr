@@ -57,6 +57,12 @@ class RtmpStreamEngine(
     fun startStream(endpoint: String) {
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
+            rtmpCamera.replaceView(openGlView)
+            if (!openGlView.isAvailable) {
+                Log.e(tag, "OpenGlView ainda não está pronta para streaming")
+                throw IllegalStateException("OpenGlView não está pronta (SurfaceTexture nula)")
+            }
+
             if (!prepareVideo()) {
                 throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
             }
