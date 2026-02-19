@@ -54,9 +54,7 @@ class RtmpStreamEngine(
             callbacks.onAuthSuccess()
         }
     }
-    private val rtmpCamera: RtmpCamera2 = RtmpCamera2(openGlView, connectChecker).also {
-        it.setReTries(10)
-    }
+    private val rtmpCamera: RtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
     private var retryCount: Int = 0
 
     fun startStream(endpoint: String) {
@@ -103,9 +101,7 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        return rtmpCamera.prepareVideo(1280, 720, 30, 2_500_000, 2, 0) ||
-            rtmpCamera.prepareVideo(1280, 720, 30, 2_500_000) ||
-            rtmpCamera.prepareVideo(1280, 720, 30)
+        return rtmpCamera.prepareVideo(1280, 720, 2_500_000)
     }
 
     private fun maybeRetry(reason: String) {
@@ -113,6 +109,6 @@ class RtmpStreamEngine(
         retryCount += 1
         val delayMs = 1_500L * retryCount
         callbacks.onRetrying(delayMs, reason)
-        rtmpCamera.reTry(delayMs.toInt(), reason, null)
+        rtmpCamera.retry(delayMs)
     }
 }
