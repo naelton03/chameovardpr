@@ -222,6 +222,7 @@ class YouTubeLiveHandler(private val context: Context) {
             monitorStream = MonitorStreamInfo().setEnableMonitorStream(false)
             enableAutoStart = true
             enableAutoStop = true
+            latencyPreference = "ultraLow"
         }
 
         Log.i(tag, "Creating YouTube liveBroadcast title=$normalizedTitle privacy=$normalizedPrivacy")
@@ -242,22 +243,12 @@ class YouTubeLiveHandler(private val context: Context) {
             isReusable = true
         }
 
-        return runCatching {
-            createLiveStreamWithIngestionType(
-                youtube = youtube,
-                snippet = snippet,
-                contentDetails = contentDetails,
-                ingestionType = "rtmps"
-            )
-        }.getOrElse { error ->
-            Log.w(tag, "Falha ao criar stream com rtmps. Tentando fallback para rtmp", error)
-            createLiveStreamWithIngestionType(
-                youtube = youtube,
-                snippet = snippet,
-                contentDetails = contentDetails,
-                ingestionType = "rtmp"
-            )
-        }
+        return createLiveStreamWithIngestionType(
+            youtube = youtube,
+            snippet = snippet,
+            contentDetails = contentDetails,
+            ingestionType = "rtmps"
+        )
     }
 
     private fun createLiveStreamWithIngestionType(
