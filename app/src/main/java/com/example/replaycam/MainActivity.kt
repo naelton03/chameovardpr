@@ -44,6 +44,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private var rtmpStreamEngine: RtmpStreamEngine? = null
     private var signedAccount: GoogleSignInAccount? = null
     private var activeLiveSession: LiveSessionInfo? = null
+    private var transitionToLiveJob: Job? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
@@ -216,6 +218,17 @@ class MainActivity : AppCompatActivity() {
     private val streamCallbacks = object : RtmpStreamEngine.Callbacks {
         override fun onConnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_CONNECTED", "RTMP conectado")
+            transitionToLiveJob?.cancel()
+            transitionToLiveJob = lifecycleScope.launch {
+                delay(3_000)
+                val session = activeLiveSession ?: return@launch
+                val account = signedAccount ?: GoogleSignIn.getLastSignedInAccount(this@MainActivity) ?: return@launch
+                youtubeLiveHandler.transitionBroadcastToLive(
+                    account = account,
+                    idToken = youtubeLiveHandler.lastIdToken ?: account.idToken,
+                    broadcastId = session.broadcastId
+                )
+            }
             runOnUiThread {
                 updateLiveButtonUi(true)
                 status("Status: live conectada")
@@ -224,6 +237,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onDisconnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_DISCONNECTED", "RTMP desconectado")
+            transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
                 status("Status: live desconectada")
@@ -232,6 +246,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onConnectionFailed(reason: String) {
             ErrorFileLogger.logError(this@MainActivity, "LIVE_CONNECTION_FAILED", IllegalStateException(reason))
+            transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
                 status("Live falhou: $reason")
@@ -271,6 +286,7 @@ class MainActivity : AppCompatActivity() {
 
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
+            transitionToLiveJob?.cancel()
             streamer.stopStream()
             activeLiveSession = null
             updateLiveButtonUi(false)

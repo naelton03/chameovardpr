@@ -217,7 +217,7 @@ class YouTubeLiveHandler(private val context: Context) {
         val normalizedPrivacy = privacyStatus.trim().lowercase(Locale.US).ifBlank { "unlisted" }
         val snippet = LiveBroadcastSnippet().apply {
             this.title = normalizedTitle
-            scheduledStartTime = com.google.api.client.util.DateTime(System.currentTimeMillis() + 60_000)
+            scheduledStartTime = com.google.api.client.util.DateTime(System.currentTimeMillis() - 10_000)
         }
         val status = LiveBroadcastStatus().apply {
             this.privacyStatus = normalizedPrivacy
@@ -238,6 +238,23 @@ class YouTubeLiveHandler(private val context: Context) {
                 this.contentDetails = contentDetails
             })
             .execute()
+    }
+
+    suspend fun transitionBroadcastToLive(
+        account: GoogleSignInAccount,
+        idToken: String?,
+        broadcastId: String
+    ) = withContext(Dispatchers.IO) {
+        runCatching {
+            val youtube = buildYouTubeService(account, idToken)
+            youtube.liveBroadcasts()
+                .transition("live", broadcastId, mutableListOf("id", "status", "snippet"))
+                .execute()
+            Log.d("YT_API", "Comando de transição para LIVE enviado!")
+        }.onFailure { error ->
+            Log.e(tag, "Falha ao enviar transição para LIVE", error)
+            ErrorFileLogger.logError(context, "YOUTUBE_TRANSITION_LIVE", error)
+        }
     }
 
     private fun createLiveStream(youtube: YouTube): LiveStream {
