@@ -122,6 +122,13 @@ class MainActivity : AppCompatActivity() {
 
         if (account != null) {
             signedAccount = account
+            val idToken = youtubeLiveHandler.lastIdToken ?: account.idToken
+            if (idToken.isNullOrBlank()) {
+                appendDiagnosticLog("Google Sign-In concluído sem idToken. Verifique google_web_client_id (Web Client).")
+                ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_ID_TOKEN", "idToken ausente")
+            } else {
+                ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_ID_TOKEN", "idToken capturado com sucesso")
+            }
             ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_RESULT", "conta recebida com sucesso")
             lifecycleScope.launch {
                 startLiveFlow(account)

@@ -40,6 +40,8 @@ class YouTubeLiveHandler(private val context: Context) {
     private val tag = "YouTubeLiveHandler"
     var lastSignInStatusCode: Int? = null
         private set
+    var lastIdToken: String? = null
+        private set
 
     private val signInClient: GoogleSignInClient by lazy {
         val webClientId = context.getString(R.string.google_web_client_id).trim()
@@ -68,9 +70,11 @@ class YouTubeLiveHandler(private val context: Context) {
         return try {
             val account = task.getResult(ApiException::class.java)
             lastSignInStatusCode = null
+            lastIdToken = account.idToken
             account
         } catch (error: ApiException) {
             lastSignInStatusCode = error.statusCode
+            lastIdToken = null
             Log.w(tag, "Google Sign-In parse falhou. statusCode=${error.statusCode}", error)
             if (error.statusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
                 ErrorFileLogger.logInfo(
@@ -84,6 +88,7 @@ class YouTubeLiveHandler(private val context: Context) {
             null
         } catch (error: Exception) {
             lastSignInStatusCode = null
+            lastIdToken = null
             Log.w(tag, "Google Sign-In parse falhou", error)
             ErrorFileLogger.logError(context, "GOOGLE_SIGN_IN_PARSE", error)
             null
@@ -113,7 +118,8 @@ class YouTubeLiveHandler(private val context: Context) {
             4) Garanta que o escopo youtube.force-ssl está sendo solicitado.
             5) Na Tela de Permissão OAuth, adicione seu e-mail em Usuários de Teste (escopo sensível).
             6) Confirme que o SHA-1 do Google Cloud é o mesmo do APK em execução (GOOGLE_OAUTH_DEBUG_INFO).
-            7) Reinstale o app após ajustar credenciais.
+            7) Se trocar ambiente/chave de build debug, atualize o SHA-1 manualmente no Google Cloud.
+            8) Reinstale o app após ajustar credenciais.
         """.trimIndent()
     }
 

@@ -33,6 +33,8 @@ No arquivo `app/src/main/res/values/strings.xml`, preencha `google_web_client_id
    (necessário porque `youtube.force-ssl` é escopo sensível).
 4. OAuth Android: `packageName=com.example.replaycam` e SHA-1 igual ao SHA do APK que está rodando
    (compare com o log `GOOGLE_OAUTH_DEBUG_INFO`).
+5. O app captura o `idToken` no retorno do Google Sign-In; se vier vazio, revise o `google_web_client_id`.
+6. Se o ambiente de debug mudar e gerar outro certificado, atualize o novo SHA-1 manualmente no Console.
 
 ## SHA-1/SHA-256 estável para Google Cloud
 
