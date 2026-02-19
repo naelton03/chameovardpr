@@ -16,6 +16,13 @@ Aplicativo Android focado em gravação contínua de câmera para capturar repla
 - Dispositivo Android com câmera traseira
 - ADB configurado para instalação direta
 
+## Configuração OAuth (Google Sign-In / YouTube Live)
+
+No arquivo `app/src/main/res/values/strings.xml`, preencha `google_web_client_id` com o **OAuth Web Client ID**
+(`...apps.googleusercontent.com`) do mesmo projeto no Google Cloud Console.
+
+> Não use o Android Client ID nesse campo.
+
 ## Build local
 
 ```bash

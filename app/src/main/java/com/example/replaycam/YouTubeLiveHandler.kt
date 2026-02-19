@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import com.example.replaycam.R
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
@@ -41,16 +42,23 @@ class YouTubeLiveHandler(private val context: Context) {
         private set
 
     private val signInClient: GoogleSignInClient by lazy {
-        // Não exigir ID token/serverAuthCode para evitar falhas por configuração do OAuth Web Client.
-        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+        val webClientId = context.getString(R.string.google_web_client_id).trim()
+        val optionsBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(
-                Scope(YouTubeScopes.YOUTUBE),
-                Scope(YouTubeScopes.YOUTUBE_FORCE_SSL)
+                Scope(YouTubeScopes.YOUTUBE_FORCE_SSL),
+                Scope(YouTubeScopes.YOUTUBE)
             )
-            .build()
 
-        GoogleSignIn.getClient(context, options)
+        if (webClientId.isNotBlank()) {
+            optionsBuilder
+                .requestIdToken(webClientId)
+                .requestServerAuthCode(webClientId)
+        } else {
+            Log.w(tag, "google_web_client_id não configurado. ID token/serverAuthCode não serão solicitados.")
+        }
+
+        GoogleSignIn.getClient(context, optionsBuilder.build())
     }
 
     fun authIntent(): Intent = signInClient.signInIntent
@@ -89,6 +97,7 @@ class YouTubeLiveHandler(private val context: Context) {
             GoogleSignInStatusCodes.DEVELOPER_ERROR -> "Erro 10 (DEVELOPER_ERROR): configure OAuth Android no Google Cloud com packageName e SHA-1/ SHA-256 corretos."
             GoogleSignInStatusCodes.NETWORK_ERROR -> "Sem rede no dispositivo para autenticar no Google."
             GoogleSignInStatusCodes.SIGN_IN_REQUIRED -> "É necessário entrar na conta Google novamente."
+            GoogleSignInStatusCodes.SIGN_IN_FAILED -> "Falha no Google Sign-In (12500). Confirme que google_web_client_id usa o OAuth Web Client ID."
             GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> "Login cancelado pelo usuário."
             null -> "Falha ao obter retorno do Google Sign-In."
             else -> "Falha Google Sign-In. statusCode=$statusCode"
@@ -98,10 +107,10 @@ class YouTubeLiveHandler(private val context: Context) {
     fun oauthSetupChecklist(): String {
         return """
             Checklist OAuth Android:
-            1) Google Cloud Console > APIs & Services > Credentials > Create credentials > OAuth client ID > Android.
-            2) Use packageName exatamente como no app.
-            3) Cadastre SHA-1 e SHA-256 do APK instalado.
-            4) Verifique se a YouTube Data API v3 está ativada no mesmo projeto.
+            1) Configure OAuth Android com packageName e SHA-1/SHA-256 do APK instalado.
+            2) Configure também um OAuth Web Client e use esse client ID em google_web_client_id.
+            3) Verifique se a YouTube Data API v3 está ativada no mesmo projeto.
+            4) Garanta que o escopo youtube.force-ssl está sendo solicitado.
             5) Reinstale o app após ajustar credenciais.
         """.trimIndent()
     }

@@ -147,7 +147,7 @@ class MainActivity : AppCompatActivity() {
             status("Erro OAuth (10): ajuste package/SHA-1/SHA-256 no Google Cloud")
             toast(getString(R.string.oauth_developer_error))
         } else {
-            toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
+            toast(hint)
         }
     }
 
