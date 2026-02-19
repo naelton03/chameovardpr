@@ -23,6 +23,17 @@ No arquivo `app/src/main/res/values/strings.xml`, preencha `google_web_client_id
 
 > Não use o Android Client ID nesse campo.
 
+
+### Checklist obrigatório no Google Cloud (para evitar Erro 10/12500)
+
+1. Projeto `replaycam` com **YouTube Data API v3** habilitada.
+2. `google_web_client_id` preenchido com o OAuth **Aplicativo da Web**:
+   `698685113444-d1926mfoqamcqehcp5bug9423ql8p1fg.apps.googleusercontent.com`
+3. Tela de consentimento OAuth: adicionar explicitamente o e-mail do desenvolvedor em **Usuários de teste**
+   (necessário porque `youtube.force-ssl` é escopo sensível).
+4. OAuth Android: `packageName=com.example.replaycam` e SHA-1 igual ao SHA do APK que está rodando
+   (compare com o log `GOOGLE_OAUTH_DEBUG_INFO`).
+
 ## SHA-1/SHA-256 estável para Google Cloud
 
 Se o SHA muda a cada build/dispositivo, o app está sendo assinado com chaves diferentes.

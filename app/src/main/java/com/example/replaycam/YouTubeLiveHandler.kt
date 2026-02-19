@@ -97,7 +97,7 @@ class YouTubeLiveHandler(private val context: Context) {
             GoogleSignInStatusCodes.DEVELOPER_ERROR -> "Erro 10 (DEVELOPER_ERROR): configure OAuth Android no Google Cloud com packageName e SHA-1/ SHA-256 corretos."
             GoogleSignInStatusCodes.NETWORK_ERROR -> "Sem rede no dispositivo para autenticar no Google."
             GoogleSignInStatusCodes.SIGN_IN_REQUIRED -> "É necessário entrar na conta Google novamente."
-            GoogleSignInStatusCodes.SIGN_IN_FAILED -> "Falha no Google Sign-In (12500). Confirme que google_web_client_id usa o OAuth Web Client ID."
+            GoogleSignInStatusCodes.SIGN_IN_FAILED -> "Falha no Google Sign-In (12500). Confirme o OAuth Web Client ID e se seu e-mail está em Usuários de Teste na tela de consentimento OAuth."
             GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> "Login cancelado pelo usuário."
             null -> "Falha ao obter retorno do Google Sign-In."
             else -> "Falha Google Sign-In. statusCode=$statusCode"
@@ -109,9 +109,11 @@ class YouTubeLiveHandler(private val context: Context) {
             Checklist OAuth Android:
             1) Configure OAuth Android com packageName e SHA-1/SHA-256 do APK instalado.
             2) Configure também um OAuth Web Client e use esse client ID em google_web_client_id.
-            3) Verifique se a YouTube Data API v3 está ativada no mesmo projeto.
+            3) Verifique se a YouTube Data API v3 está ativada no projeto replaycam.
             4) Garanta que o escopo youtube.force-ssl está sendo solicitado.
-            5) Reinstale o app após ajustar credenciais.
+            5) Na Tela de Permissão OAuth, adicione seu e-mail em Usuários de Teste (escopo sensível).
+            6) Confirme que o SHA-1 do Google Cloud é o mesmo do APK em execução (GOOGLE_OAUTH_DEBUG_INFO).
+            7) Reinstale o app após ajustar credenciais.
         """.trimIndent()
     }
 
