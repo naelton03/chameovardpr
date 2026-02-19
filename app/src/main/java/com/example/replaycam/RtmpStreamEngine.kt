@@ -125,44 +125,9 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        val methods = rtmpCamera.javaClass.methods.filter { it.name == "prepareVideo" }
-
-        val preferredSixArgs = methods.firstOrNull {
-            it.parameterTypes.size == 6 &&
-                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[2] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[3] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[4] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[5] == Int::class.javaPrimitiveType
-        }
-
-        if (preferredSixArgs != null) {
-            val prepared = runCatching {
-                preferredSixArgs.invoke(rtmpCamera, 1280, 720, YT_FPS, YT_VIDEO_BITRATE, 0, YT_KEYFRAME_INTERVAL_SEC) as Boolean
-            }.getOrElse {
-                preferredSixArgs.invoke(rtmpCamera, 1280, 720, YT_FPS, YT_VIDEO_BITRATE, YT_KEYFRAME_INTERVAL_SEC, 0) as Boolean
-            }
-            configureYoutubeVideoProfileIfSupported()
-            Log.i(tag, "prepareVideo(6 args) aplicado com 1280x720 ${YT_FPS}fps bitrate=${YT_VIDEO_BITRATE} keyframe=${YT_KEYFRAME_INTERVAL_SEC}s")
-            return prepared
-        }
-
-        val preferredThreeArgs = methods.firstOrNull {
-            it.parameterTypes.size == 3 &&
-                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
-                it.parameterTypes[2] == Int::class.javaPrimitiveType
-        }
-
-        val prepared = if (preferredThreeArgs != null) {
-            preferredThreeArgs.invoke(rtmpCamera, 1280, 720, YT_VIDEO_BITRATE) as Boolean
-        } else {
-            rtmpCamera.prepareVideo(1280, 720, YT_VIDEO_BITRATE)
-        }
-
+        val prepared = rtmpCamera.prepareVideo(1280, 720, YT_VIDEO_BITRATE)
         configureYoutubeVideoProfileIfSupported()
-        Log.i(tag, "prepareVideo fallback aplicado com 1280x720 bitrate=${YT_VIDEO_BITRATE}")
+        Log.i(tag, "prepareVideo aplicado com 1280x720 bitrate=${YT_VIDEO_BITRATE} (fps/keyframe via setters)")
         return prepared
     }
 

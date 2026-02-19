@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity() {
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
     private var transitionRequestedAfterMediaFlow = false
+    private var hasRetriedWithPlainRtmp = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
@@ -252,8 +253,13 @@ class MainActivity : AppCompatActivity() {
                     if (transitioned) {
                         status("Status: ao vivo no YouTube")
                     } else {
+                        val fallbackApplied = retryWithPlainRtmpIfNeeded()
                         transitionRequestedAfterMediaFlow = false
-                        status("Status: mídia enviada, YouTube ainda em 'programado' (ver logs YOUTUBE_LIVE_*)")
+                        if (fallbackApplied) {
+                            status("Status: retry automático em RTMP (sem TLS) aplicado; aguardando mídia...")
+                        } else {
+                            status("Status: mídia enviada, YouTube ainda em 'programado' (ver logs YOUTUBE_LIVE_*)")
+                        }
                     }
                 }
             }
@@ -313,6 +319,7 @@ class MainActivity : AppCompatActivity() {
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
             transitionRequestedAfterMediaFlow = false
+            hasRetriedWithPlainRtmp = false
             transitionToLiveJob?.cancel()
             streamer.stopStream()
             activeLiveSession = null
@@ -363,6 +370,7 @@ class MainActivity : AppCompatActivity() {
         }.onSuccess { session ->
             signedAccount = safeAccount
             activeLiveSession = session
+            hasRetriedWithPlainRtmp = false
             val endpoint = buildRtmpEndpoint(session.rtmpServerUrl, session.streamKey)
             Log.i(tag, "Sessão ativa broadcast=${session.broadcastId} stream=${session.streamId}")
             Log.i(tag, "Stream key desta sessão (prefixo)=${session.streamKey.take(6)}...")
@@ -421,6 +429,24 @@ class MainActivity : AppCompatActivity() {
         val server = ingestionAddress.trim().trimEnd('/')
         val key = streamName.trim().trimStart('/')
         return "$server/$key"
+    }
+
+    private fun retryWithPlainRtmpIfNeeded(): Boolean {
+        val session = activeLiveSession ?: return false
+        if (hasRetriedWithPlainRtmp) return false
+        if (!session.rtmpServerUrl.startsWith("rtmps://", ignoreCase = true)) return false
+
+        val streamer = rtmpStreamEngine ?: return false
+        hasRetriedWithPlainRtmp = true
+
+        val fallbackServer = session.rtmpServerUrl.replaceFirst("rtmps://", "rtmp://")
+        val fallbackEndpoint = buildRtmpEndpoint(fallbackServer, session.streamKey)
+        ErrorFileLogger.logInfo(this, "LIVE_RTMP_FALLBACK", "Aplicando fallback para endpoint=$fallbackEndpoint")
+        Log.w(tag, "Aplicando fallback RTMP sem TLS para tentar ativar ingestão YouTube")
+
+        streamer.stopStream()
+        streamer.startStream(fallbackEndpoint)
+        return true
     }
 
     private fun allPermissionsGranted(): Boolean {
