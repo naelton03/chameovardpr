@@ -19,6 +19,7 @@ import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.youtube.YouTube
 import com.google.api.services.youtube.YouTubeScopes
+import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.services.youtube.model.CdnSettings
 import com.google.api.services.youtube.model.LiveBroadcast
 import com.google.api.services.youtube.model.LiveBroadcastContentDetails
@@ -247,6 +248,27 @@ class YouTubeLiveHandler(private val context: Context) {
     ) = withContext(Dispatchers.IO) {
         runCatching {
             val youtube = buildYouTubeService(account, idToken)
+            val transitioned = runCatching {
+                youtube.liveBroadcasts()
+                    .transition("testing", broadcastId, mutableListOf("id", "status", "snippet"))
+                    .execute()
+                Log.d("YT_API", "Comando de transição para TESTING enviado!")
+                true
+            }.getOrElse { error ->
+                val googleError = error as? GoogleJsonResponseException
+                val reason = googleError?.details?.errors?.firstOrNull()?.reason
+                if (reason == "invalidTransition") {
+                    Log.i(tag, "Transição para TESTING não aplicável (reason=invalidTransition). Seguindo para LIVE.")
+                    false
+                } else {
+                    throw error
+                }
+            }
+
+            if (transitioned) {
+                kotlinx.coroutines.delay(2_000)
+            }
+
             youtube.liveBroadcasts()
                 .transition("live", broadcastId, mutableListOf("id", "status", "snippet"))
                 .execute()
