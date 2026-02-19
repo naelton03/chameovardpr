@@ -15,7 +15,7 @@
         app:layout_constraintTop_toTopOf="parent"
         app:scaleType="fillCenter" />
 
-    <SurfaceView
+    <com.pedro.library.view.OpenGlView
         android:id="@+id/streamSurface"
         android:layout_width="1dp"
         android:layout_height="1dp"

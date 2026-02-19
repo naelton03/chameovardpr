@@ -1,13 +1,13 @@
 package com.example.replaycam
 
 import android.util.Log
-import android.view.SurfaceView
 import com.pedro.common.ConnectChecker
 import com.pedro.library.rtmp.RtmpCamera2
+import com.pedro.library.view.OpenGlView
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RtmpStreamEngine(
-    private val surfaceView: SurfaceView,
+    private val openGlView: OpenGlView,
     private val callbacks: Callbacks
 ) {
 
@@ -22,41 +22,40 @@ class RtmpStreamEngine(
 
     private val tag = "RtmpStreamEngine"
     private val isConnected = AtomicBoolean(false)
-    private val camera: RtmpCamera2 by lazy {
-        RtmpCamera2(surfaceView, object : ConnectChecker {
-            override fun onConnectionStarted(url: String) {
-                Log.i(tag, "RTMP connection started url=$url")
-            }
-
-            override fun onConnectionSuccessRtmp() {
-                retryCount = 0
-                isConnected.set(true)
-                callbacks.onConnected()
-            }
-
-            override fun onConnectionFailedRtmp(reason: String) {
-                isConnected.set(false)
-                callbacks.onConnectionFailed(reason)
-                maybeRetry(reason)
-            }
-
-            override fun onNewBitrateRtmp(bitrate: Long) = Unit
-
-            override fun onDisconnectRtmp() {
-                isConnected.set(false)
-                callbacks.onDisconnected()
-            }
-
-            override fun onAuthErrorRtmp() {
-                callbacks.onAuthError()
-            }
-
-            override fun onAuthSuccessRtmp() {
-                callbacks.onAuthSuccess()
-            }
-        }).also {
-            it.setReTries(10)
+    private val connectChecker = object : ConnectChecker {
+        override fun onConnectionStarted(url: String) {
+            Log.i(tag, "RTMP connection started url=$url")
         }
+
+        override fun onConnectionSuccess() {
+            retryCount = 0
+            isConnected.set(true)
+            callbacks.onConnected()
+        }
+
+        override fun onConnectionFailed(reason: String) {
+            isConnected.set(false)
+            callbacks.onConnectionFailed(reason)
+            maybeRetry(reason)
+        }
+
+        override fun onNewBitrate(bitrate: Long) = Unit
+
+        override fun onDisconnect() {
+            isConnected.set(false)
+            callbacks.onDisconnected()
+        }
+
+        override fun onAuthError() {
+            callbacks.onAuthError()
+        }
+
+        override fun onAuthSuccess() {
+            callbacks.onAuthSuccess()
+        }
+    }
+    private val rtmpCamera: RtmpCamera2 = RtmpCamera2(openGlView, connectChecker).also {
+        it.setReTries(10)
     }
     private var retryCount: Int = 0
 
@@ -66,12 +65,12 @@ class RtmpStreamEngine(
             if (!prepareVideo()) {
                 throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
             }
-            if (!camera.prepareAudio()) {
+            if (!rtmpCamera.prepareAudio()) {
                 throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
             }
 
             retryCount = 0
-            camera.startStream(endpoint)
+            rtmpCamera.startStream(endpoint)
             isConnected.set(true)
             Log.i(tag, "RTMP stream started")
         }.onFailure { error ->
@@ -84,19 +83,19 @@ class RtmpStreamEngine(
 
     fun stopStream() {
         Log.i(tag, "stopStream called")
-        if (camera.isStreaming) {
-            camera.stopStream()
+        if (rtmpCamera.isStreaming) {
+            rtmpCamera.stopStream()
         }
         isConnected.set(false)
     }
 
     fun isStreaming(): Boolean {
-        return camera.isStreaming
+        return rtmpCamera.isStreaming
     }
 
     fun setBitrateOnFly(bitrate: Int) {
         Log.w(tag, "Applying bitrate throttle: $bitrate")
-        camera.setVideoBitrateOnFly(bitrate)
+        rtmpCamera.setVideoBitrateOnFly(bitrate)
     }
 
     fun close() {
@@ -104,9 +103,9 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        return camera.prepareVideo(1280, 720, 30, 2_500_000, 2, 0) ||
-            camera.prepareVideo(1280, 720, 30, 2_500_000) ||
-            camera.prepareVideo(1280, 720, 30)
+        return rtmpCamera.prepareVideo(1280, 720, 30, 2_500_000, 2, 0) ||
+            rtmpCamera.prepareVideo(1280, 720, 30, 2_500_000) ||
+            rtmpCamera.prepareVideo(1280, 720, 30)
     }
 
     private fun maybeRetry(reason: String) {
@@ -114,6 +113,6 @@ class RtmpStreamEngine(
         retryCount += 1
         val delayMs = 1_500L * retryCount
         callbacks.onRetrying(delayMs, reason)
-        camera.reTry(delayMs.toInt(), reason, null)
+        rtmpCamera.reTry(delayMs.toInt(), reason, null)
     }
 }
