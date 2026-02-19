@@ -58,9 +58,9 @@ class RtmpStreamEngine(
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
             rtmpCamera.replaceView(openGlView)
-            if (!openGlView.isAvailable) {
-                Log.e(tag, "OpenGlView ainda não está pronta para streaming")
-                throw IllegalStateException("OpenGlView não está pronta (SurfaceTexture nula)")
+            if (!rtmpCamera.isOnPreview) {
+                Log.w(tag, "Preview RTMP não estava ativo. Iniciando preview antes do stream")
+                rtmpCamera.startPreview(openGlView)
             }
 
             if (!prepareVideo()) {
