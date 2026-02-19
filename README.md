@@ -107,11 +107,10 @@ Se você não passar `owner/repo`, o script tenta inferir automaticamente a part
 
 ## Dependência RTMP (PedroSG94)
 
-A funcionalidade de live usa classes `RtmpCamera2` e `ConnectCheckerRtmp` da biblioteca PedroSG94.
-Se houver erro `ClassNotFoundException`/`SDK RTMP ausente no APK`, confirme que ao menos uma das dependências
+A funcionalidade de live usa classes `RtmpCamera2` e `ConnectChecker` da biblioteca PedroSG94.
+Se houver erro `ClassNotFoundException`/`SDK RTMP ausente no APK`, confirme que esta dependência
 foi resolvida no build:
-- `com.github.pedroSG94.RootEncoder:library:2.4.5`
-- `com.github.pedroSG94.rtmp-rtsp-stream-client-java:library:2.4.5`
+- `com.github.pedroSG94.RootEncoder:rtmp:2.4.8`
 
 ## Pipeline CI (GitHub Actions)
 
