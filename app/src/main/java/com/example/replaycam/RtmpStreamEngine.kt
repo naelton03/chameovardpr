@@ -2,8 +2,7 @@ package com.example.replaycam
 
 import android.util.Log
 import android.view.SurfaceView
-import com.pedro.common.ConnectChecker
-import com.pedro.library.rtmp.RtmpCamera2
+import java.lang.reflect.Proxy
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RtmpStreamEngine(
@@ -22,7 +21,7 @@ class RtmpStreamEngine(
 
     private val tag = "RtmpStreamEngine"
     private val isConnected = AtomicBoolean(false)
-    private var cameraInstance: RtmpCamera2? = null
+    private var cameraInstance: Any? = null
     private var retryCount: Int = 0
 
     fun startStream(endpoint: String) {
@@ -30,15 +29,15 @@ class RtmpStreamEngine(
         runCatching {
             val instance = cameraInstance ?: createCameraInstance().also { cameraInstance = it }
 
-            if (!instance.prepareVideo(1280, 720, 30, 2_500_000, 2, 0)) {
+            if (!prepareVideo(instance)) {
                 throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
             }
-            if (!instance.prepareAudio()) {
+            if (!invokeBoolean(instance, "prepareAudio")) {
                 throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
             }
 
             retryCount = 0
-            instance.startStream(endpoint)
+            invoke(instance, "startStream", endpoint)
             isConnected.set(true)
             Log.i(tag, "RTMP stream started")
         }.onFailure { error ->
@@ -51,17 +50,21 @@ class RtmpStreamEngine(
 
     fun stopStream() {
         Log.i(tag, "stopStream called")
-        cameraInstance?.stopStream()
+        cameraInstance?.let { invoke(it, "stopStream") }
         isConnected.set(false)
     }
 
     fun isStreaming(): Boolean {
-        return cameraInstance?.isStreaming ?: false
+        return cameraInstance?.let { invokeBoolean(it, "isStreaming") } ?: false
     }
 
     fun setBitrateOnFly(bitrate: Int) {
         Log.w(tag, "Applying bitrate throttle: $bitrate")
-        cameraInstance?.setVideoBitrateOnFly(bitrate)
+        cameraInstance?.let {
+            if (!invokeSafely(it, "setVideoBitrateOnFly", bitrate)) {
+                invokeSafely(it, "setVideoBitrate", bitrate)
+            }
+        }
     }
 
     fun close() {
@@ -69,37 +72,82 @@ class RtmpStreamEngine(
         cameraInstance = null
     }
 
-    private fun createCameraInstance(): RtmpCamera2 {
-        val checker = object : ConnectChecker {
-            override fun onConnectionSuccess() {
-                retryCount = 0
-                isConnected.set(true)
-                callbacks.onConnected()
+    private fun createCameraInstance(): Any {
+        val checkerClass = runCatching { Class.forName("com.pedro.common.ConnectChecker") }
+            .getOrElse {
+                throw IllegalStateException("SDK RTMP ausente no APK. Classe ConnectChecker não encontrada.", it)
             }
 
-            override fun onConnectionFailed(reason: String) {
-                isConnected.set(false)
-                callbacks.onConnectionFailed(reason)
-                maybeRetry(reason)
-            }
+        val proxy = Proxy.newProxyInstance(
+            checkerClass.classLoader,
+            arrayOf(checkerClass)
+        ) { _, method, args ->
+            when (method.name) {
+                "onConnectionStarted", "onConnectionStartedRtmp" -> {
+                    val url = args?.firstOrNull()?.toString().orEmpty()
+                    Log.i(tag, "RTMP connection started url=$url")
+                }
 
-            override fun onDisconnect() {
-                isConnected.set(false)
-                callbacks.onDisconnected()
-            }
+                "onConnectionSuccess", "onConnectionSuccessRtmp" -> {
+                    retryCount = 0
+                    isConnected.set(true)
+                    callbacks.onConnected()
+                }
 
-            override fun onAuthError() {
-                callbacks.onAuthError()
-            }
+                "onConnectionFailed", "onConnectionFailedRtmp" -> {
+                    isConnected.set(false)
+                    val reason = args?.firstOrNull()?.toString() ?: "unknown"
+                    callbacks.onConnectionFailed(reason)
+                    maybeRetry(reason)
+                }
 
-            override fun onAuthSuccess() {
-                callbacks.onAuthSuccess()
+                "onDisconnect", "onDisconnectRtmp" -> {
+                    isConnected.set(false)
+                    callbacks.onDisconnected()
+                }
+
+                "onAuthError", "onAuthErrorRtmp" -> callbacks.onAuthError()
+                "onAuthSuccess", "onAuthSuccessRtmp" -> callbacks.onAuthSuccess()
             }
+            null
         }
 
-        return RtmpCamera2(surfaceView, checker).also {
-            it.setReTries(10)
+        val classCandidates = listOf(
+            "com.pedro.library.rtmp.RtmpCamera2",
+            "com.pedro.library.rtmp.RtmpCamera1",
+            "com.pedro.library.base.Camera2Base",
+            "com.pedro.library.base.Camera1Base"
+        )
+
+        val cameraClass = classCandidates
+            .asSequence()
+            .mapNotNull { name -> runCatching { Class.forName(name) }.getOrNull() }
+            .firstOrNull()
+            ?: throw IllegalStateException("SDK RTMP ausente no APK. Nenhuma classe de câmera RTMP compatível foi encontrada.")
+
+        val constructor = cameraClass.constructors.firstOrNull { constructor ->
+            val parameterTypes = constructor.parameterTypes
+            parameterTypes.size == 2 && parameterTypes[0].isAssignableFrom(SurfaceView::class.java)
+        } ?: throw IllegalStateException("Construtor RTMP compatível não encontrado em ${cameraClass.name}")
+
+        return constructor.newInstance(surfaceView, proxy).also {
+            invokeSafely(it, "setReTries", 10)
         }
+    }
+
+    private fun prepareVideo(instance: Any): Boolean {
+        // Assinaturas comuns entre versões
+        val attempts = listOf(
+            arrayOf(1280, 720, 30, 2_500_000, 2, 0),
+            arrayOf(1280, 720, 30, 2_500_000),
+            arrayOf(1280, 720, 30)
+        )
+
+        attempts.forEach { args ->
+            val result = invokeBoolean(instance, "prepareVideo", *args)
+            if (result) return true
+        }
+        return false
     }
 
     private fun maybeRetry(reason: String) {
@@ -108,10 +156,35 @@ class RtmpStreamEngine(
         retryCount += 1
         val delayMs = 1_500L * retryCount
         callbacks.onRetrying(delayMs, reason)
-        runCatching {
-            current.reTry(delayMs.toInt(), reason, null)
-        }.onFailure { error ->
-            Log.w(tag, "Auto retry fallback failed: ${error.message}", error)
+
+        val retried = invokeBoolean(current, "reTry", delayMs.toInt(), reason, null)
+        if (!retried) {
+            invokeBoolean(current, "retry", delayMs.toInt(), reason, null)
         }
+    }
+
+    private fun invoke(target: Any, methodName: String, vararg args: Any?) {
+        val method = target.javaClass.methods.firstOrNull { method ->
+            method.name == methodName && method.parameterTypes.size == args.size
+        } ?: throw NoSuchMethodException("Method not found: $methodName/${args.size}")
+        method.invoke(target, *args)
+    }
+
+    private fun invokeSafely(target: Any, methodName: String, vararg args: Any?): Boolean {
+        return runCatching {
+            invoke(target, methodName, *args)
+            true
+        }.getOrDefault(false)
+    }
+
+    private fun invokeBoolean(target: Any, methodName: String, vararg args: Any?): Boolean {
+        val method = target.javaClass.methods.firstOrNull { method ->
+            method.name == methodName && method.parameterTypes.size == args.size
+        } ?: return false
+
+        return runCatching {
+            val result = method.invoke(target, *args)
+            result as? Boolean ?: true
+        }.getOrDefault(false)
     }
 }
