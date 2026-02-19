@@ -298,7 +298,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         runCatching {
-            youtubeLiveHandler.createLiveSession(safeAccount)
+            youtubeLiveHandler.createLiveSession(safeAccount, youtubeLiveHandler.lastIdToken ?: safeAccount.idToken)
         }.onSuccess { session ->
             signedAccount = safeAccount
             val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"

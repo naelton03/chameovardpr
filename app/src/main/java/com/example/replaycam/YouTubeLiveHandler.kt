@@ -37,6 +37,10 @@ import java.util.Locale
 
 class YouTubeLiveHandler(private val context: Context) {
 
+    private companion object {
+        private const val REQUIRED_WEB_CLIENT_ID = "698685113444-d1926mfoqamcqehcp5bug9423ql8p1fg.apps.googleusercontent.com"
+    }
+
     private val tag = "YouTubeLiveHandler"
     var lastSignInStatusCode: Int? = null
         private set
@@ -44,7 +48,8 @@ class YouTubeLiveHandler(private val context: Context) {
         private set
 
     private val signInClient: GoogleSignInClient by lazy {
-        val webClientId = context.getString(R.string.google_web_client_id).trim()
+        val resourceWebClientId = context.getString(R.string.google_web_client_id).trim()
+        val webClientId = resourceWebClientId.ifBlank { REQUIRED_WEB_CLIENT_ID }
         val optionsBuilder = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
             .requestScopes(
@@ -150,11 +155,11 @@ class YouTubeLiveHandler(private val context: Context) {
             .joinToString(":") { "%02X".format(it) }
     }
 
-    suspend fun createLiveSession(account: GoogleSignInAccount): LiveSessionInfo = withContext(Dispatchers.IO) {
+    suspend fun createLiveSession(account: GoogleSignInAccount, idToken: String?): LiveSessionInfo = withContext(Dispatchers.IO) {
         runCatching {
             Log.i(tag, "createLiveSession start for account=${account.email}")
             ErrorFileLogger.logInfo(context, "YOUTUBE_CREATE_LIVE_SESSION", "iniciado para ${account.email}")
-            val youtube = buildYouTubeService(account)
+            val youtube = buildYouTubeService(account, idToken)
             val stream = createLiveStream(youtube)
             val broadcast = createLiveBroadcast(youtube)
             bindBroadcastToStream(youtube, broadcast.id, stream.id)
@@ -174,7 +179,7 @@ class YouTubeLiveHandler(private val context: Context) {
         }.getOrThrow()
     }
 
-    private fun buildYouTubeService(account: GoogleSignInAccount): YouTube {
+    private fun buildYouTubeService(account: GoogleSignInAccount, idToken: String?): YouTube {
         val credential = GoogleAccountCredential.usingOAuth2(
             context,
             listOf(YouTubeScopes.YOUTUBE, YouTubeScopes.YOUTUBE_FORCE_SSL)
@@ -184,6 +189,9 @@ class YouTubeLiveHandler(private val context: Context) {
 
         val initializer = HttpRequestInitializer { request ->
             credential.initialize(request)
+            if (!idToken.isNullOrBlank()) {
+                request.headers.authorization = "Bearer $idToken"
+            }
             request.connectTimeout = 20_000
             request.readTimeout = 20_000
         }
