@@ -19,6 +19,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -102,6 +103,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private val manageAllFilesPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (ErrorFileLogger.canWriteRoot(this)) {
+            appendDiagnosticLog("Permissão para log na raiz concedida: ${ErrorFileLogger.primaryRootPath()}")
+            toast("Log na raiz habilitado")
+        } else {
+            appendDiagnosticLog("Permissão para log na raiz NÃO concedida")
+            toast("Sem permissão para gravar log na raiz")
+        }
+    }
+
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val parsedAccount = youtubeLiveHandler.parseSignInResult(result.data)
         val fallbackAccount = GoogleSignIn.getLastSignedInAccount(this)
@@ -130,9 +143,28 @@ class MainActivity : AppCompatActivity() {
         if (signInStatusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
             val oauthDebugInfo = youtubeLiveHandler.oauthDebugInfo()
             appendDiagnosticLog("GOOGLE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
-            toast("Falha OAuth Google (código 10). Confira package e SHA no log do app.")
+            toast("Falha OAuth Google (código 10). Corrija package/SHA no Google Cloud.")
         } else {
             toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
+        }
+    }
+
+    private fun ensureRootLogPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (ErrorFileLogger.canWriteRoot(this)) {
+            appendDiagnosticLog("Log na raiz disponível em ${ErrorFileLogger.primaryRootPath()}")
+            return
+        }
+
+        appendDiagnosticLog("Solicitando permissão MANAGE_EXTERNAL_STORAGE para log na raiz")
+        val intent = Intent(
+            Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+            Uri.parse("package:$packageName")
+        )
+        runCatching {
+            manageAllFilesPermissionLauncher.launch(intent)
+        }.onFailure {
+            manageAllFilesPermissionLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
         }
     }
 
@@ -143,6 +175,7 @@ class MainActivity : AppCompatActivity() {
 
         ErrorFileLogger.installGlobalHandlers(this)
         ErrorFileLogger.logInfo(this, "APP_START", "MainActivity criada")
+        ensureRootLogPermission()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         youtubeLiveHandler = YouTubeLiveHandler(this)

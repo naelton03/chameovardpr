@@ -1,9 +1,12 @@
 package com.example.replaycam
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.util.Log
+import androidx.core.content.ContextCompat
 import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
@@ -44,6 +47,17 @@ object ErrorFileLogger {
         writeEntry(context, entry)
     }
 
+
+    fun primaryRootPath(): String = resolvePrimaryLogFile().absolutePath
+
+    fun canWriteRoot(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
     private fun buildEntry(action: String, error: Throwable): String {
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
         return buildString {
@@ -62,9 +76,13 @@ object ErrorFileLogger {
     private fun writeEntry(context: Context, entry: String) {
         synchronized(lock) {
             val target = resolvePrimaryLogFile()
-            val targetWritten = runCatching {
-                target.parentFile?.mkdirs()
-                FileWriter(target, true).use { it.append(entry) }
+            val targetWritten = if (canWriteRoot(context)) {
+                runCatching {
+                    target.parentFile?.mkdirs()
+                    FileWriter(target, true).use { it.append(entry) }
+                }
+            } else {
+                Result.failure(IllegalStateException("Sem permissão para gravar na raiz"))
             }
 
             if (targetWritten.isFailure) {
