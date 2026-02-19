@@ -59,6 +59,7 @@ class RtmpStreamEngine(
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
             configureNetworkBufferIfSupported()
+            configureWriteLoopIntervalIfSupported()
             rtmpCamera.replaceView(openGlView)
             if (!rtmpCamera.isOnPreview) {
                 Log.w(tag, "Preview RTMP não estava ativo. Iniciando preview antes do stream")
@@ -131,5 +132,24 @@ class RtmpStreamEngine(
         }
 
         Log.i(tag, "API de ajuste de buffer não disponível nesta versão; mantendo padrão da biblioteca")
+    }
+
+    private fun configureWriteLoopIntervalIfSupported() {
+        val method = rtmpCamera.javaClass.methods.firstOrNull {
+            it.name == "setWriteLoopInterval" && it.parameterTypes.size == 1 &&
+                (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+        }
+
+        if (method == null) {
+            Log.i(tag, "setWriteLoopInterval indisponível nesta versão; mantendo intervalo padrão")
+            return
+        }
+
+        runCatching {
+            method.invoke(rtmpCamera, 100)
+            Log.i(tag, "Write loop interval configurado para 100ms")
+        }.onFailure { error ->
+            Log.w(tag, "Falha ao configurar setWriteLoopInterval: ${error.message}")
+        }
     }
 }

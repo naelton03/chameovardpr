@@ -232,7 +232,7 @@ class YouTubeLiveHandler(private val context: Context) {
             title = "ReplayCam Stream ${System.currentTimeMillis()}"
         }
         val cdn = CdnSettings().apply {
-            ingestionType = "rtmp"
+            ingestionType = "rtmps"
             resolution = "720p"
             frameRate = "30fps"
         }

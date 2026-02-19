@@ -67,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var youtubeLiveHandler: YouTubeLiveHandler
     private var rtmpStreamEngine: RtmpStreamEngine? = null
     private var signedAccount: GoogleSignInAccount? = null
+    private var activeLiveSession: LiveSessionInfo? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
@@ -268,6 +269,7 @@ class MainActivity : AppCompatActivity() {
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
             streamer.stopStream()
+            activeLiveSession = null
             updateLiveButtonUi(false)
             status(getString(R.string.live_stopped))
             return
@@ -292,17 +294,26 @@ class MainActivity : AppCompatActivity() {
         }
 
         withContext(Dispatchers.Main) {
-            Log.i(tag, "Criando sessão YouTube Live")
-            status("Status: criando sessão YouTube Live...")
+            if (activeLiveSession == null) {
+                Log.i(tag, "Criando sessão YouTube Live")
+                status("Status: criando sessão YouTube Live...")
+            } else {
+                Log.i(tag, "Reutilizando sessão YouTube Live existente")
+                status("Status: reutilizando sessão de live existente...")
+            }
             binding.toggleLiveButton.isEnabled = false
         }
 
         runCatching {
-            youtubeLiveHandler.createLiveSession(safeAccount, youtubeLiveHandler.lastIdToken ?: safeAccount.idToken)
+            activeLiveSession ?: youtubeLiveHandler.createLiveSession(
+                safeAccount,
+                youtubeLiveHandler.lastIdToken ?: safeAccount.idToken
+            )
         }.onSuccess { session ->
             signedAccount = safeAccount
+            activeLiveSession = session
             val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"
-            Log.i(tag, "Sessão criada broadcast=${session.broadcastId} stream=${session.streamId}")
+            Log.i(tag, "Sessão ativa broadcast=${session.broadcastId} stream=${session.streamId}")
             rtmpStreamEngine?.startStream(endpoint)
             withContext(Dispatchers.Main) {
                 updateLiveButtonUi(true)
