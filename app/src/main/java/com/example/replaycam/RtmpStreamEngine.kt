@@ -1,15 +1,23 @@
 package com.example.replaycam
 
 import android.util.Log
-import android.view.SurfaceView
 import com.pedro.common.ConnectChecker
 import com.pedro.library.rtmp.RtmpCamera2
+import com.pedro.library.view.OpenGlView
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RtmpStreamEngine(
-    private val surfaceView: SurfaceView,
+    private val openGlView: OpenGlView,
     private val callbacks: Callbacks
 ) {
+
+    private companion object {
+        private const val YT_VIDEO_BITRATE = 2_500 * 1024
+        private const val YT_AUDIO_BITRATE = 128 * 1024
+        private const val YT_AUDIO_SAMPLE_RATE = 44_100
+        private const val YT_FPS = 30
+        private const val YT_KEYFRAME_INTERVAL_SEC = 2
+    }
 
     interface Callbacks {
         fun onConnected()
@@ -22,56 +30,59 @@ class RtmpStreamEngine(
 
     private val tag = "RtmpStreamEngine"
     private val isConnected = AtomicBoolean(false)
-    private val camera: RtmpCamera2 by lazy {
-        RtmpCamera2(surfaceView, object : ConnectChecker {
-            override fun onConnectionStarted(url: String) {
-                Log.i(tag, "RTMP connection started url=$url")
-            }
+    private val connectChecker = object : ConnectChecker {
+        override fun onConnectionStarted(url: String) {
+            Log.i(tag, "RTMP connection started url=$url")
+        }
 
-            override fun onConnectionSuccessRtmp() {
-                retryCount = 0
-                isConnected.set(true)
-                callbacks.onConnected()
-            }
+        override fun onConnectionSuccess() {
+            isConnected.set(true)
+            callbacks.onConnected()
+        }
 
-            override fun onConnectionFailedRtmp(reason: String) {
-                isConnected.set(false)
-                callbacks.onConnectionFailed(reason)
-                maybeRetry(reason)
-            }
+        override fun onConnectionFailed(reason: String) {
+            isConnected.set(false)
+            Log.e(tag, "RTMP connection failed. reason=$reason")
+            callbacks.onConnectionFailed(reason)
+            maybeRetry()
+        }
 
-            override fun onNewBitrateRtmp(bitrate: Long) = Unit
+        override fun onNewBitrate(bitrate: Long) = Unit
 
-            override fun onDisconnectRtmp() {
-                isConnected.set(false)
-                callbacks.onDisconnected()
-            }
+        override fun onDisconnect() {
+            isConnected.set(false)
+            callbacks.onDisconnected()
+        }
 
-            override fun onAuthErrorRtmp() {
-                callbacks.onAuthError()
-            }
+        override fun onAuthError() {
+            callbacks.onAuthError()
+        }
 
-            override fun onAuthSuccessRtmp() {
-                callbacks.onAuthSuccess()
-            }
-        }).also {
-            it.setReTries(10)
+        override fun onAuthSuccess() {
+            callbacks.onAuthSuccess()
         }
     }
-    private var retryCount: Int = 0
-
+    private val rtmpCamera: RtmpCamera2 = RtmpCamera2(openGlView, connectChecker)
     fun startStream(endpoint: String) {
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
+            configureNetworkBufferIfSupported()
+            configureWriteLoopIntervalIfSupported()
+            rtmpCamera.replaceView(openGlView)
+            if (!rtmpCamera.isOnPreview) {
+                Log.w(tag, "Preview RTMP não estava ativo. Iniciando preview antes do stream")
+                rtmpCamera.startPreview()
+            }
+
             if (!prepareVideo()) {
                 throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
             }
-            if (!camera.prepareAudio()) {
+            if (!prepareAudio()) {
                 throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
             }
 
-            retryCount = 0
-            camera.startStream(endpoint)
+            rtmpCamera.startStream(endpoint)
+            rtmpCamera.setVideoBitrateOnFly(YT_VIDEO_BITRATE)
             isConnected.set(true)
             Log.i(tag, "RTMP stream started")
         }.onFailure { error ->
@@ -84,19 +95,19 @@ class RtmpStreamEngine(
 
     fun stopStream() {
         Log.i(tag, "stopStream called")
-        if (camera.isStreaming) {
-            camera.stopStream()
+        if (rtmpCamera.isStreaming) {
+            rtmpCamera.stopStream()
         }
         isConnected.set(false)
     }
 
     fun isStreaming(): Boolean {
-        return camera.isStreaming
+        return rtmpCamera.isStreaming
     }
 
     fun setBitrateOnFly(bitrate: Int) {
         Log.w(tag, "Applying bitrate throttle: $bitrate")
-        camera.setVideoBitrateOnFly(bitrate)
+        rtmpCamera.setVideoBitrateOnFly(bitrate)
     }
 
     fun close() {
@@ -104,16 +115,120 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        return camera.prepareVideo(1280, 720, 30, 2_500_000, 2, 0) ||
-            camera.prepareVideo(1280, 720, 30, 2_500_000) ||
-            camera.prepareVideo(1280, 720, 30)
+        val prepared = rtmpCamera.prepareVideo(1280, 720, YT_VIDEO_BITRATE)
+        configureYoutubeVideoProfileIfSupported()
+        return prepared
     }
 
-    private fun maybeRetry(reason: String) {
-        if (retryCount >= 5) return
-        retryCount += 1
-        val delayMs = 1_500L * retryCount
-        callbacks.onRetrying(delayMs, reason)
-        camera.reTry(delayMs.toInt(), reason, null)
+    private fun prepareAudio(): Boolean {
+        val methods = rtmpCamera.javaClass.methods.filter { it.name == "prepareAudio" }
+
+        val preferredFiveArgs = methods.firstOrNull {
+            it.parameterTypes.size == 5 &&
+                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[2] == Boolean::class.javaPrimitiveType &&
+                it.parameterTypes[3] == Boolean::class.javaPrimitiveType &&
+                it.parameterTypes[4] == Boolean::class.javaPrimitiveType
+        }
+        if (preferredFiveArgs != null) {
+            return runCatching {
+                preferredFiveArgs.invoke(rtmpCamera, YT_AUDIO_BITRATE, YT_AUDIO_SAMPLE_RATE, true, false, false) as Boolean
+            }.onFailure { error ->
+                Log.w(tag, "Falha prepareAudio(5 args): ${error.message}")
+            }.getOrDefault(false)
+        }
+
+        val preferredThreeArgs = methods.firstOrNull {
+            it.parameterTypes.size == 3 &&
+                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[2] == Boolean::class.javaPrimitiveType
+        }
+        if (preferredThreeArgs != null) {
+            return runCatching {
+                preferredThreeArgs.invoke(rtmpCamera, YT_AUDIO_BITRATE, YT_AUDIO_SAMPLE_RATE, true) as Boolean
+            }.onFailure { error ->
+                Log.w(tag, "Falha prepareAudio(3 args): ${error.message}")
+            }.getOrDefault(false)
+        }
+
+        return rtmpCamera.prepareAudio()
+    }
+
+    private fun configureYoutubeVideoProfileIfSupported() {
+        invokeIntMethodIfExists("setForceFpsLimit", YT_FPS)
+        invokeIntMethodIfExists("setFps", YT_FPS)
+        invokeIntMethodIfExists("setIFrameInterval", YT_KEYFRAME_INTERVAL_SEC)
+        invokeIntMethodIfExists("setKeyFrameInterval", YT_KEYFRAME_INTERVAL_SEC)
+        invokeProfileBaselineIfSupported()
+    }
+
+    private fun invokeIntMethodIfExists(methodName: String, value: Int) {
+        val method = rtmpCamera.javaClass.methods.firstOrNull {
+            it.name == methodName && it.parameterTypes.size == 1 &&
+                (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+        } ?: return
+
+        runCatching { method.invoke(rtmpCamera, value) }
+            .onSuccess { Log.i(tag, "$methodName aplicado com valor=$value") }
+            .onFailure { error -> Log.w(tag, "Falha ao aplicar $methodName: ${error.message}") }
+    }
+
+    private fun invokeProfileBaselineIfSupported() {
+        val method = rtmpCamera.javaClass.methods.firstOrNull {
+            it.name == "setProfile" && it.parameterTypes.size == 1 &&
+                (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+        } ?: return
+
+        runCatching {
+            method.invoke(rtmpCamera, android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            Log.i(tag, "H.264 profile definido para Baseline")
+        }.onFailure { error ->
+            Log.w(tag, "Falha ao definir profile Baseline: ${error.message}")
+        }
+    }
+
+    private fun maybeRetry() {
+        Log.e("RtmpStreamEngine", "Conexão perdida")
+    }
+
+    private fun configureNetworkBufferIfSupported() {
+        val candidates = listOf("setSocketSendBuffer", "setSocketBufferSize", "setBufferSize")
+        for (name in candidates) {
+            val method = rtmpCamera.javaClass.methods.firstOrNull {
+                it.name == name && it.parameterTypes.size == 1 &&
+                    (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+            } ?: continue
+
+            runCatching {
+                method.invoke(rtmpCamera, 512 * 1024)
+                Log.i(tag, "Network buffer configurado via $name")
+            }.onFailure { error ->
+                Log.w(tag, "Falha ao configurar buffer via $name: ${error.message}")
+            }
+            return
+        }
+
+        Log.i(tag, "API de ajuste de buffer não disponível nesta versão; mantendo padrão da biblioteca")
+    }
+
+    private fun configureWriteLoopIntervalIfSupported() {
+        val method = rtmpCamera.javaClass.methods.firstOrNull {
+            it.name == "setWriteLoopInterval" && it.parameterTypes.size == 1 &&
+                (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+        }
+
+        if (method == null) {
+            Log.i(tag, "setWriteLoopInterval indisponível nesta versão; mantendo intervalo padrão")
+            return
+        }
+
+        runCatching {
+            method.invoke(rtmpCamera, 100)
+            Log.i(tag, "Write loop interval configurado para 100ms")
+        }.onFailure { error ->
+            Log.w(tag, "Falha ao configurar setWriteLoopInterval: ${error.message}")
+        }
     }
 }

@@ -19,6 +19,7 @@ import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.youtube.YouTube
 import com.google.api.services.youtube.YouTubeScopes
+import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.services.youtube.model.CdnSettings
 import com.google.api.services.youtube.model.LiveBroadcast
 import com.google.api.services.youtube.model.LiveBroadcastContentDetails
@@ -155,24 +156,34 @@ class YouTubeLiveHandler(private val context: Context) {
             .joinToString(":") { "%02X".format(it) }
     }
 
-    suspend fun createLiveSession(account: GoogleSignInAccount, idToken: String?): LiveSessionInfo = withContext(Dispatchers.IO) {
+    suspend fun createLiveSession(
+        account: GoogleSignInAccount,
+        idToken: String?,
+        title: String,
+        privacyStatus: String
+    ): LiveSessionInfo = withContext(Dispatchers.IO) {
         runCatching {
             Log.i(tag, "createLiveSession start for account=${account.email}")
             ErrorFileLogger.logInfo(context, "YOUTUBE_CREATE_LIVE_SESSION", "iniciado para ${account.email}")
             val youtube = buildYouTubeService(account, idToken)
             val stream = createLiveStream(youtube)
-            val broadcast = createLiveBroadcast(youtube)
+            val broadcast = createLiveBroadcast(youtube, title, privacyStatus)
             bindBroadcastToStream(youtube, broadcast.id, stream.id)
             Log.i(tag, "createLiveSession done broadcastId=${broadcast.id} streamId=${stream.id}")
 
             val ingestion = stream.cdn?.ingestionInfo
                 ?: error("YouTube retornou stream sem ingestionInfo")
+            val ingestionAddress = ingestion.ingestionAddress?.trim().orEmpty()
+            val streamName = ingestion.streamName?.trim().orEmpty()
+            require(ingestionAddress.isNotBlank()) { "YouTube retornou ingestionAddress vazio" }
+            require(streamName.isNotBlank()) { "YouTube retornou streamName vazio" }
+            Log.i(tag, "Ingestion recebido address=$ingestionAddress streamName=$streamName")
 
             LiveSessionInfo(
                 broadcastId = broadcast.id,
                 streamId = stream.id,
-                rtmpServerUrl = ingestion.ingestionAddress,
-                streamKey = ingestion.streamName
+                rtmpServerUrl = ingestionAddress,
+                streamKey = streamName
             )
         }.onFailure { error ->
             ErrorFileLogger.logError(context, "YOUTUBE_CREATE_LIVE_SESSION", error)
@@ -201,23 +212,26 @@ class YouTubeLiveHandler(private val context: Context) {
             .build()
     }
 
-    private fun createLiveBroadcast(youtube: YouTube): LiveBroadcast {
+    private fun createLiveBroadcast(youtube: YouTube, title: String, privacyStatus: String): LiveBroadcast {
         val titleStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+        val normalizedTitle = title.trim().ifBlank { "ReplayCam Live $titleStamp" }
+        val normalizedPrivacy = privacyStatus.trim().lowercase(Locale.US).ifBlank { "unlisted" }
         val snippet = LiveBroadcastSnippet().apply {
-            title = "ReplayCam Live $titleStamp"
-            scheduledStartTime = com.google.api.client.util.DateTime(System.currentTimeMillis() + 60_000)
+            this.title = normalizedTitle
+            scheduledStartTime = com.google.api.client.util.DateTime(System.currentTimeMillis() - 10_000)
         }
         val status = LiveBroadcastStatus().apply {
-            privacyStatus = "unlisted"
+            this.privacyStatus = normalizedPrivacy
             selfDeclaredMadeForKids = false
         }
         val contentDetails = LiveBroadcastContentDetails().apply {
             monitorStream = MonitorStreamInfo().setEnableMonitorStream(false)
             enableAutoStart = true
-            enableAutoStop = false
+            enableAutoStop = true
+            latencyPreference = "ultraLow"
         }
 
-        Log.i(tag, "Creating YouTube liveBroadcast")
+        Log.i(tag, "Creating YouTube liveBroadcast title=$normalizedTitle privacy=$normalizedPrivacy")
         return youtube.liveBroadcasts()
             .insert(mutableListOf("snippet", "status", "contentDetails"), LiveBroadcast().apply {
                 this.snippet = snippet
@@ -227,24 +241,74 @@ class YouTubeLiveHandler(private val context: Context) {
             .execute()
     }
 
+    suspend fun transitionBroadcastToLive(
+        account: GoogleSignInAccount,
+        idToken: String?,
+        broadcastId: String
+    ) = withContext(Dispatchers.IO) {
+        runCatching {
+            val youtube = buildYouTubeService(account, idToken)
+            val transitioned = runCatching {
+                youtube.liveBroadcasts()
+                    .transition("testing", broadcastId, mutableListOf("id", "status", "snippet"))
+                    .execute()
+                Log.d("YT_API", "Comando de transição para TESTING enviado!")
+                true
+            }.getOrElse { error ->
+                val googleError = error as? GoogleJsonResponseException
+                val reason = googleError?.details?.errors?.firstOrNull()?.reason
+                if (reason == "invalidTransition") {
+                    Log.i(tag, "Transição para TESTING não aplicável (reason=invalidTransition). Seguindo para LIVE.")
+                    false
+                } else {
+                    throw error
+                }
+            }
+
+            if (transitioned) {
+                kotlinx.coroutines.delay(2_000)
+            }
+
+            youtube.liveBroadcasts()
+                .transition("live", broadcastId, mutableListOf("id", "status", "snippet"))
+                .execute()
+            Log.d("YT_API", "Comando de transição para LIVE enviado!")
+        }.onFailure { error ->
+            Log.e(tag, "Falha ao enviar transição para LIVE", error)
+            ErrorFileLogger.logError(context, "YOUTUBE_TRANSITION_LIVE", error)
+        }
+    }
+
     private fun createLiveStream(youtube: YouTube): LiveStream {
         val snippet = LiveStreamSnippet().apply {
             title = "ReplayCam Stream ${System.currentTimeMillis()}"
-        }
-        val cdn = CdnSettings().apply {
-            ingestionType = "rtmp"
-            resolution = "720p"
-            frameRate = "30fps"
         }
         val contentDetails = LiveStreamContentDetails().apply {
             isReusable = true
         }
 
-        Log.i(tag, "Creating YouTube liveStream (720p/30fps)")
+        return createLiveStreamWithIngestionType(
+            youtube = youtube,
+            snippet = snippet,
+            contentDetails = contentDetails
+        )
+    }
+
+    private fun createLiveStreamWithIngestionType(
+        youtube: YouTube,
+        snippet: LiveStreamSnippet,
+        contentDetails: LiveStreamContentDetails
+    ): LiveStream {
+        val cdnSettings = CdnSettings()
+        cdnSettings.setIngestionType("rtmp")
+        cdnSettings.setResolution("720p")
+        cdnSettings.setFrameRate("30fps")
+
+        Log.i(tag, "Creating YouTube liveStream (ingestionType=rtmp, 720p/30fps)")
         return youtube.liveStreams()
             .insert(mutableListOf("snippet", "cdn", "contentDetails"), LiveStream().apply {
                 this.snippet = snippet
-                this.cdn = cdn
+                this.cdn = cdnSettings
                 this.contentDetails = contentDetails
             })
             .execute()

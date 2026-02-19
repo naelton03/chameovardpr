@@ -21,6 +21,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -42,6 +43,8 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -67,6 +70,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var youtubeLiveHandler: YouTubeLiveHandler
     private var rtmpStreamEngine: RtmpStreamEngine? = null
     private var signedAccount: GoogleSignInAccount? = null
+    private var activeLiveSession: LiveSessionInfo? = null
+    private var transitionToLiveJob: Job? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
@@ -196,6 +201,7 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
         binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
+        setupLiveConfigUi()
         updateLiveButtonUi(false)
         updateVideoPathLabel()
         clearSegmentCache()
@@ -212,6 +218,17 @@ class MainActivity : AppCompatActivity() {
     private val streamCallbacks = object : RtmpStreamEngine.Callbacks {
         override fun onConnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_CONNECTED", "RTMP conectado")
+            transitionToLiveJob?.cancel()
+            transitionToLiveJob = lifecycleScope.launch {
+                delay(3_000)
+                val session = activeLiveSession ?: return@launch
+                val account = signedAccount ?: GoogleSignIn.getLastSignedInAccount(this@MainActivity) ?: return@launch
+                youtubeLiveHandler.transitionBroadcastToLive(
+                    account = account,
+                    idToken = youtubeLiveHandler.lastIdToken ?: account.idToken,
+                    broadcastId = session.broadcastId
+                )
+            }
             runOnUiThread {
                 updateLiveButtonUi(true)
                 status("Status: live conectada")
@@ -220,6 +237,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onDisconnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_DISCONNECTED", "RTMP desconectado")
+            transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
                 status("Status: live desconectada")
@@ -228,6 +246,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onConnectionFailed(reason: String) {
             ErrorFileLogger.logError(this@MainActivity, "LIVE_CONNECTION_FAILED", IllegalStateException(reason))
+            transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
                 status("Live falhou: $reason")
@@ -267,7 +286,9 @@ class MainActivity : AppCompatActivity() {
 
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
+            transitionToLiveJob?.cancel()
             streamer.stopStream()
+            activeLiveSession = null
             updateLiveButtonUi(false)
             status(getString(R.string.live_stopped))
             return
@@ -292,17 +313,35 @@ class MainActivity : AppCompatActivity() {
         }
 
         withContext(Dispatchers.Main) {
-            Log.i(tag, "Criando sessão YouTube Live")
-            status("Status: criando sessão YouTube Live...")
+            if (activeLiveSession == null) {
+                Log.i(tag, "Criando sessão YouTube Live")
+                status("Status: criando sessão YouTube Live...")
+            } else {
+                Log.i(tag, "Reutilizando sessão YouTube Live existente")
+                status("Status: reutilizando sessão de live existente...")
+            }
             binding.toggleLiveButton.isEnabled = false
         }
 
+        val liveTitle = selectedLiveTitle()
+        val privacyStatus = selectedPrivacyStatus()
+
         runCatching {
-            youtubeLiveHandler.createLiveSession(safeAccount, youtubeLiveHandler.lastIdToken ?: safeAccount.idToken)
+            activeLiveSession ?: youtubeLiveHandler.createLiveSession(
+                safeAccount,
+                youtubeLiveHandler.lastIdToken ?: safeAccount.idToken,
+                liveTitle,
+                privacyStatus
+            )
         }.onSuccess { session ->
             signedAccount = safeAccount
-            val endpoint = "${session.rtmpServerUrl}/${session.streamKey}"
-            Log.i(tag, "Sessão criada broadcast=${session.broadcastId} stream=${session.streamId}")
+            activeLiveSession = session
+            val endpoint = buildRtmpEndpoint(session.rtmpServerUrl, session.streamKey)
+            Log.i(tag, "Sessão ativa broadcast=${session.broadcastId} stream=${session.streamId}")
+            Log.i(tag, "Stream key desta sessão (prefixo)=${session.streamKey.take(6)}...")
+            Log.d("RTMP_DEBUG", "URL Final: $endpoint")
+            delay(1_500)
+            Log.i(tag, "Iniciando envio RTMP para endpoint=$endpoint")
             rtmpStreamEngine?.startStream(endpoint)
             withContext(Dispatchers.Main) {
                 updateLiveButtonUi(true)
@@ -326,6 +365,35 @@ class MainActivity : AppCompatActivity() {
         binding.toggleLiveButton.text = if (isLive) getString(R.string.live_on) else getString(R.string.live_off)
         val color = if (isLive) android.R.color.holo_red_dark else android.R.color.darker_gray
         binding.toggleLiveButton.setBackgroundColor(ContextCompat.getColor(this, color))
+    }
+
+    private fun setupLiveConfigUi() {
+        val privacyOptions = listOf(
+            getString(R.string.privacy_public),
+            getString(R.string.privacy_unlisted),
+            getString(R.string.privacy_private)
+        )
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, privacyOptions)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.privacySpinner.adapter = adapter
+        binding.privacySpinner.setSelection(1)
+    }
+
+    private fun selectedLiveTitle(): String {
+        val typed = binding.liveTitleInput.text?.toString()?.trim().orEmpty()
+        return typed.ifBlank { getString(R.string.default_live_title) }
+    }
+
+    private fun selectedPrivacyStatus(): String {
+        return binding.privacySpinner.selectedItem?.toString()?.trim().orEmpty().ifBlank {
+            getString(R.string.privacy_unlisted)
+        }
+    }
+
+    private fun buildRtmpEndpoint(ingestionAddress: String, streamName: String): String {
+        val server = ingestionAddress.trim().trimEnd('/').replaceFirst("rtmps://", "rtmp://")
+        val key = streamName.trim().trimStart('/')
+        return "$server/$key"
     }
 
     private fun allPermissionsGranted(): Boolean {
