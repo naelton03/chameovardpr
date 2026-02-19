@@ -19,8 +19,37 @@ extensions.configure<ApplicationExtension>("android") {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+
+    signingConfigs {
+        val keystorePath = providers.gradleProperty("REPLAYCAM_KEYSTORE_PATH")
+            .orElse(providers.environmentVariable("REPLAYCAM_KEYSTORE_PATH"))
+            .orNull
+        val keyAlias = providers.gradleProperty("REPLAYCAM_KEY_ALIAS")
+            .orElse(providers.environmentVariable("REPLAYCAM_KEY_ALIAS"))
+            .orNull
+        val storePassword = providers.gradleProperty("REPLAYCAM_STORE_PASSWORD")
+            .orElse(providers.environmentVariable("REPLAYCAM_STORE_PASSWORD"))
+            .orNull
+        val keyPassword = providers.gradleProperty("REPLAYCAM_KEY_PASSWORD")
+            .orElse(providers.environmentVariable("REPLAYCAM_KEY_PASSWORD"))
+            .orNull
+
+        if (!keystorePath.isNullOrBlank() && !keyAlias.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+            create("stableOAuth") {
+                storeFile = file(keystorePath)
+                this.keyAlias = keyAlias
+                this.storePassword = storePassword
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.findByName("stableOAuth") ?: signingConfigs.getByName("debug")
+        }
         getByName("release") {
+            signingConfig = signingConfigs.findByName("stableOAuth") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

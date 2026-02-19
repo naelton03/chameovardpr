@@ -23,6 +23,26 @@ No arquivo `app/src/main/res/values/strings.xml`, preencha `google_web_client_id
 
 > Não use o Android Client ID nesse campo.
 
+## SHA-1/SHA-256 estável para Google Cloud
+
+Se o SHA muda a cada build/dispositivo, o app está sendo assinado com chaves diferentes.
+Gere uma chave única e reutilize sempre a mesma para debug/release:
+
+```bash
+bash scripts/setup_oauth_keystore.sh
+```
+
+Depois adicione no seu `~/.gradle/gradle.properties`:
+
+```properties
+REPLAYCAM_KEYSTORE_PATH=/workspace/chameovardpr/.keystore/replaycam-oauth.jks
+REPLAYCAM_KEY_ALIAS=replaycamoauth
+REPLAYCAM_STORE_PASSWORD=replaycam123
+REPLAYCAM_KEY_PASSWORD=replaycam123
+```
+
+O script imprime os fingerprints SHA-1 e SHA-256 para cadastrar no Google Cloud Console (OAuth Android).
+
 ## Build local
 
 ```bash
