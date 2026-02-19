@@ -124,9 +124,14 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        Log.e(tag, "Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode")
-        appendDiagnosticLog("Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode")
-        toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
+        val hint = youtubeLiveHandler.signInErrorHint(signInStatusCode)
+        Log.e(tag, "Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode hint=$hint")
+        appendDiagnosticLog("Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode hint=$hint")
+        if (signInStatusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
+            toast("Falha OAuth Google (código 10). Verifique SHA-1/SHA-256 no Google Cloud.")
+        } else {
+            toast("Falha ao autenticar no Google (código: ${signInStatusCode ?: result.resultCode})")
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

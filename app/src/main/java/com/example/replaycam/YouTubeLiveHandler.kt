@@ -72,6 +72,17 @@ class YouTubeLiveHandler(private val context: Context) {
 
     fun isAuthenticated(): Boolean = GoogleSignIn.getLastSignedInAccount(context) != null
 
+    fun signInErrorHint(statusCode: Int?): String {
+        return when (statusCode) {
+            GoogleSignInStatusCodes.DEVELOPER_ERROR -> "Erro 10 (DEVELOPER_ERROR): configure OAuth Android no Google Cloud com packageName e SHA-1/ SHA-256 corretos."
+            GoogleSignInStatusCodes.NETWORK_ERROR -> "Sem rede no dispositivo para autenticar no Google."
+            GoogleSignInStatusCodes.SIGN_IN_REQUIRED -> "É necessário entrar na conta Google novamente."
+            GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> "Login cancelado pelo usuário."
+            null -> "Falha ao obter retorno do Google Sign-In."
+            else -> "Falha Google Sign-In. statusCode=$statusCode"
+        }
+    }
+
     suspend fun createLiveSession(account: GoogleSignInAccount): LiveSessionInfo = withContext(Dispatchers.IO) {
         runCatching {
             Log.i(tag, "createLiveSession start for account=${account.email}")
