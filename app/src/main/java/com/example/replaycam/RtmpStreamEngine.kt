@@ -11,6 +11,14 @@ class RtmpStreamEngine(
     private val callbacks: Callbacks
 ) {
 
+    private companion object {
+        private const val YT_VIDEO_BITRATE = 2_500 * 1024
+        private const val YT_AUDIO_BITRATE = 128 * 1024
+        private const val YT_AUDIO_SAMPLE_RATE = 44_100
+        private const val YT_FPS = 30
+        private const val YT_KEYFRAME_INTERVAL_SEC = 2
+    }
+
     interface Callbacks {
         fun onConnected()
         fun onDisconnected()
@@ -69,12 +77,12 @@ class RtmpStreamEngine(
             if (!prepareVideo()) {
                 throw IllegalStateException("Falha ao preparar vídeo RTMP (prepareVideo=false)")
             }
-            if (!rtmpCamera.prepareAudio()) {
+            if (!prepareAudio()) {
                 throw IllegalStateException("Falha ao preparar áudio RTMP (prepareAudio=false)")
             }
 
             rtmpCamera.startStream(endpoint)
-            rtmpCamera.setVideoBitrateOnFly(5_000_000)
+            rtmpCamera.setVideoBitrateOnFly(YT_VIDEO_BITRATE)
             isConnected.set(true)
             Log.i(tag, "RTMP stream started")
         }.onFailure { error ->
@@ -107,7 +115,78 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        return rtmpCamera.prepareVideo(1280, 720, 5_000_000)
+        val prepared = rtmpCamera.prepareVideo(1280, 720, YT_VIDEO_BITRATE)
+        configureYoutubeVideoProfileIfSupported()
+        return prepared
+    }
+
+    private fun prepareAudio(): Boolean {
+        val methods = rtmpCamera.javaClass.methods.filter { it.name == "prepareAudio" }
+
+        val preferredFiveArgs = methods.firstOrNull {
+            it.parameterTypes.size == 5 &&
+                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[2] == Boolean::class.javaPrimitiveType &&
+                it.parameterTypes[3] == Boolean::class.javaPrimitiveType &&
+                it.parameterTypes[4] == Boolean::class.javaPrimitiveType
+        }
+        if (preferredFiveArgs != null) {
+            return runCatching {
+                preferredFiveArgs.invoke(rtmpCamera, YT_AUDIO_BITRATE, YT_AUDIO_SAMPLE_RATE, true, false, false) as Boolean
+            }.onFailure { error ->
+                Log.w(tag, "Falha prepareAudio(5 args): ${error.message}")
+            }.getOrDefault(false)
+        }
+
+        val preferredThreeArgs = methods.firstOrNull {
+            it.parameterTypes.size == 3 &&
+                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[2] == Boolean::class.javaPrimitiveType
+        }
+        if (preferredThreeArgs != null) {
+            return runCatching {
+                preferredThreeArgs.invoke(rtmpCamera, YT_AUDIO_BITRATE, YT_AUDIO_SAMPLE_RATE, true) as Boolean
+            }.onFailure { error ->
+                Log.w(tag, "Falha prepareAudio(3 args): ${error.message}")
+            }.getOrDefault(false)
+        }
+
+        return rtmpCamera.prepareAudio()
+    }
+
+    private fun configureYoutubeVideoProfileIfSupported() {
+        invokeIntMethodIfExists("setForceFpsLimit", YT_FPS)
+        invokeIntMethodIfExists("setFps", YT_FPS)
+        invokeIntMethodIfExists("setIFrameInterval", YT_KEYFRAME_INTERVAL_SEC)
+        invokeIntMethodIfExists("setKeyFrameInterval", YT_KEYFRAME_INTERVAL_SEC)
+        invokeProfileBaselineIfSupported()
+    }
+
+    private fun invokeIntMethodIfExists(methodName: String, value: Int) {
+        val method = rtmpCamera.javaClass.methods.firstOrNull {
+            it.name == methodName && it.parameterTypes.size == 1 &&
+                (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+        } ?: return
+
+        runCatching { method.invoke(rtmpCamera, value) }
+            .onSuccess { Log.i(tag, "$methodName aplicado com valor=$value") }
+            .onFailure { error -> Log.w(tag, "Falha ao aplicar $methodName: ${error.message}") }
+    }
+
+    private fun invokeProfileBaselineIfSupported() {
+        val method = rtmpCamera.javaClass.methods.firstOrNull {
+            it.name == "setProfile" && it.parameterTypes.size == 1 &&
+                (it.parameterTypes[0] == Int::class.javaPrimitiveType || it.parameterTypes[0] == Int::class.javaObjectType)
+        } ?: return
+
+        runCatching {
+            method.invoke(rtmpCamera, android.media.MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
+            Log.i(tag, "H.264 profile definido para Baseline")
+        }.onFailure { error ->
+            Log.w(tag, "Falha ao definir profile Baseline: ${error.message}")
+        }
     }
 
     private fun maybeRetry() {
