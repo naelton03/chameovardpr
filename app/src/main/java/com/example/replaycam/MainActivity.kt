@@ -72,6 +72,7 @@ class MainActivity : AppCompatActivity() {
     private var signedAccount: GoogleSignInAccount? = null
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
+    private var transitionRequestedAfterMediaFlow = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 5_000L
@@ -219,13 +220,26 @@ class MainActivity : AppCompatActivity() {
         override fun onConnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_CONNECTED", "RTMP conectado")
             transitionToLiveJob?.cancel()
+            transitionRequestedAfterMediaFlow = false
+            runOnUiThread {
+                updateLiveButtonUi(true)
+                status("Status: RTMP conectado; aguardando envio de mídia...")
+            }
+        }
+
+        override fun onMediaFlowing(bitrate: Long) {
+            if (transitionRequestedAfterMediaFlow) return
+            transitionRequestedAfterMediaFlow = true
+            ErrorFileLogger.logInfo(this@MainActivity, "LIVE_MEDIA_FLOW", "bitrate=$bitrate")
+
+            transitionToLiveJob?.cancel()
             transitionToLiveJob = lifecycleScope.launch {
-                delay(3_000)
+                delay(1_000)
                 val session = activeLiveSession ?: return@launch
                 val account = signedAccount ?: GoogleSignIn.getLastSignedInAccount(this@MainActivity) ?: return@launch
 
                 withContext(Dispatchers.Main) {
-                    status("Status: RTMP conectado, verificando transição no YouTube...")
+                    status("Status: mídia detectada, verificando transição no YouTube...")
                 }
 
                 val transitioned = youtubeLiveHandler.transitionBroadcastToLive(
@@ -238,18 +252,16 @@ class MainActivity : AppCompatActivity() {
                     if (transitioned) {
                         status("Status: ao vivo no YouTube")
                     } else {
-                        status("Status: RTMP conectado, YouTube ainda em 'programado' (verifique logs YOUTUBE_LIVE_*)")
+                        transitionRequestedAfterMediaFlow = false
+                        status("Status: mídia enviada, YouTube ainda em 'programado' (ver logs YOUTUBE_LIVE_*)")
                     }
                 }
-            }
-            runOnUiThread {
-                updateLiveButtonUi(true)
-                status("Status: live conectada (RTMP)")
             }
         }
 
         override fun onDisconnected() {
             ErrorFileLogger.logInfo(this@MainActivity, "LIVE_DISCONNECTED", "RTMP desconectado")
+            transitionRequestedAfterMediaFlow = false
             transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
@@ -259,6 +271,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onConnectionFailed(reason: String) {
             ErrorFileLogger.logError(this@MainActivity, "LIVE_CONNECTION_FAILED", IllegalStateException(reason))
+            transitionRequestedAfterMediaFlow = false
             transitionToLiveJob?.cancel()
             runOnUiThread {
                 updateLiveButtonUi(false)
@@ -299,6 +312,7 @@ class MainActivity : AppCompatActivity() {
 
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
+            transitionRequestedAfterMediaFlow = false
             transitionToLiveJob?.cancel()
             streamer.stopStream()
             activeLiveSession = null

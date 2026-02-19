@@ -5,6 +5,7 @@ import com.pedro.common.ConnectChecker
 import com.pedro.library.rtmp.RtmpCamera2
 import com.pedro.library.view.OpenGlView
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class RtmpStreamEngine(
     private val openGlView: OpenGlView,
@@ -26,10 +27,12 @@ class RtmpStreamEngine(
         fun onAuthError()
         fun onAuthSuccess()
         fun onRetrying(delayMs: Long, reason: String)
+        fun onMediaFlowing(bitrate: Long)
     }
 
     private val tag = "RtmpStreamEngine"
     private val isConnected = AtomicBoolean(false)
+    private val mediaFlowBitrate = AtomicLong(0L)
     private val connectChecker = object : ConnectChecker {
         override fun onConnectionStarted(url: String) {
             Log.i(tag, "RTMP connection started url=$url")
@@ -47,7 +50,12 @@ class RtmpStreamEngine(
             maybeRetry()
         }
 
-        override fun onNewBitrate(bitrate: Long) = Unit
+        override fun onNewBitrate(bitrate: Long) {
+            mediaFlowBitrate.set(bitrate)
+            if (bitrate > 0L) {
+                callbacks.onMediaFlowing(bitrate)
+            }
+        }
 
         override fun onDisconnect() {
             isConnected.set(false)
@@ -66,6 +74,7 @@ class RtmpStreamEngine(
     fun startStream(endpoint: String) {
         Log.i(tag, "startStream called endpoint=$endpoint")
         runCatching {
+            mediaFlowBitrate.set(0L)
             configureNetworkBufferIfSupported()
             configureWriteLoopIntervalIfSupported()
             rtmpCamera.replaceView(openGlView)
@@ -98,6 +107,7 @@ class RtmpStreamEngine(
         if (rtmpCamera.isStreaming) {
             rtmpCamera.stopStream()
         }
+        mediaFlowBitrate.set(0L)
         isConnected.set(false)
     }
 
@@ -115,8 +125,44 @@ class RtmpStreamEngine(
     }
 
     private fun prepareVideo(): Boolean {
-        val prepared = rtmpCamera.prepareVideo(1280, 720, YT_VIDEO_BITRATE)
+        val methods = rtmpCamera.javaClass.methods.filter { it.name == "prepareVideo" }
+
+        val preferredSixArgs = methods.firstOrNull {
+            it.parameterTypes.size == 6 &&
+                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[2] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[3] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[4] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[5] == Int::class.javaPrimitiveType
+        }
+
+        if (preferredSixArgs != null) {
+            val prepared = runCatching {
+                preferredSixArgs.invoke(rtmpCamera, 1280, 720, YT_FPS, YT_VIDEO_BITRATE, 0, YT_KEYFRAME_INTERVAL_SEC) as Boolean
+            }.getOrElse {
+                preferredSixArgs.invoke(rtmpCamera, 1280, 720, YT_FPS, YT_VIDEO_BITRATE, YT_KEYFRAME_INTERVAL_SEC, 0) as Boolean
+            }
+            configureYoutubeVideoProfileIfSupported()
+            Log.i(tag, "prepareVideo(6 args) aplicado com 1280x720 ${YT_FPS}fps bitrate=${YT_VIDEO_BITRATE} keyframe=${YT_KEYFRAME_INTERVAL_SEC}s")
+            return prepared
+        }
+
+        val preferredThreeArgs = methods.firstOrNull {
+            it.parameterTypes.size == 3 &&
+                it.parameterTypes[0] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[1] == Int::class.javaPrimitiveType &&
+                it.parameterTypes[2] == Int::class.javaPrimitiveType
+        }
+
+        val prepared = if (preferredThreeArgs != null) {
+            preferredThreeArgs.invoke(rtmpCamera, 1280, 720, YT_VIDEO_BITRATE) as Boolean
+        } else {
+            rtmpCamera.prepareVideo(1280, 720, YT_VIDEO_BITRATE)
+        }
+
         configureYoutubeVideoProfileIfSupported()
+        Log.i(tag, "prepareVideo fallback aplicado com 1280x720 bitrate=${YT_VIDEO_BITRATE}")
         return prepared
     }
 
