@@ -223,6 +223,11 @@ class MainActivity : AppCompatActivity() {
                 delay(3_000)
                 val session = activeLiveSession ?: return@launch
                 val account = signedAccount ?: GoogleSignIn.getLastSignedInAccount(this@MainActivity) ?: return@launch
+
+                withContext(Dispatchers.Main) {
+                    status("Status: RTMP conectado, verificando transição no YouTube...")
+                }
+
                 val transitioned = youtubeLiveHandler.transitionBroadcastToLive(
                     account = account,
                     idToken = youtubeLiveHandler.lastIdToken ?: account.idToken,
@@ -233,7 +238,7 @@ class MainActivity : AppCompatActivity() {
                     if (transitioned) {
                         status("Status: ao vivo no YouTube")
                     } else {
-                        status("Status: RTMP conectado, aguardando YouTube sair de 'programado'")
+                        status("Status: RTMP conectado, YouTube ainda em 'programado' (verifique logs YOUTUBE_LIVE_*)")
                     }
                 }
             }

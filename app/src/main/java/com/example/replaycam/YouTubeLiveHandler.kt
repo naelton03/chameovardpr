@@ -199,11 +199,12 @@ class YouTubeLiveHandler(private val context: Context) {
             selectedAccount = account.account
         }
 
+        if (!idToken.isNullOrBlank()) {
+            Log.i(tag, "idToken recebido no sign-in, mas autenticação YouTube usa access token OAuth2 do GoogleAccountCredential.")
+        }
+
         val initializer = HttpRequestInitializer { request ->
             credential.initialize(request)
-            if (!idToken.isNullOrBlank()) {
-                request.headers.authorization = "Bearer $idToken"
-            }
             request.connectTimeout = 20_000
             request.readTimeout = 20_000
         }
@@ -258,6 +259,11 @@ class YouTubeLiveHandler(private val context: Context) {
                     "Aguardando broadcast ficar pronto (tentativa ${attempt + 1}/$maxAttempts): " +
                         "lifecycle=${status.broadcastLifeCycleStatus}, stream=${status.streamStatus}"
                 )
+                ErrorFileLogger.logInfo(
+                    context,
+                    "YOUTUBE_LIVE_STATUS_POLL",
+                    "attempt=${attempt + 1}/$maxAttempts lifecycle=${status.broadcastLifeCycleStatus} stream=${status.streamStatus}"
+                )
 
                 if (status.broadcastLifeCycleStatus == "live") {
                     Log.i(tag, "Broadcast já está em LIVE.")
@@ -265,6 +271,11 @@ class YouTubeLiveHandler(private val context: Context) {
                 }
 
                 if (status.streamStatus != "active") {
+                    ErrorFileLogger.logInfo(
+                        context,
+                        "YOUTUBE_LIVE_WAITING_STREAM",
+                        "streamStatus=${status.streamStatus.ifBlank { "vazio" }}; aguardando ${pollDelayMs}ms"
+                    )
                     delay(pollDelayMs)
                     return@repeat
                 }
@@ -280,6 +291,7 @@ class YouTubeLiveHandler(private val context: Context) {
                     val reason = googleError?.details?.errors?.firstOrNull()?.reason
                     if (reason == "invalidTransition") {
                         Log.i(tag, "Transição para TESTING não aplicável (reason=invalidTransition). Seguindo para LIVE.")
+                        ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "transição TESTING não aplicável; tentando LIVE")
                         false
                     } else {
                         throw error
@@ -294,20 +306,28 @@ class YouTubeLiveHandler(private val context: Context) {
                     .transition("live", broadcastId, mutableListOf("id", "status", "snippet"))
                     .execute()
                 Log.d("YT_API", "Comando de transição para LIVE enviado!")
+                ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "comando enviado com sucesso")
 
                 val updatedStatus = fetchBroadcastRuntimeStatus(youtube, broadcastId)
                 if (updatedStatus.broadcastLifeCycleStatus == "live") {
                     Log.i(tag, "Broadcast confirmado em LIVE após transição.")
+                    ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "broadcast confirmado em LIVE")
                     return@withContext true
                 }
 
                 delay(pollDelayMs)
             }
 
+            ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE", "timeout aguardando broadcast entrar em LIVE")
             false
         }.onFailure { error ->
-            Log.e(tag, "Falha ao enviar transição para LIVE", error)
+            val googleError = error as? GoogleJsonResponseException
+            val reason = googleError?.details?.errors?.firstOrNull()?.reason
+            Log.e(tag, "Falha ao enviar transição para LIVE reason=$reason", error)
             ErrorFileLogger.logError(context, "YOUTUBE_TRANSITION_LIVE", error)
+            if (!reason.isNullOrBlank()) {
+                ErrorFileLogger.logInfo(context, "YOUTUBE_TRANSITION_LIVE_REASON", reason)
+            }
         }.getOrDefault(false)
     }
 
