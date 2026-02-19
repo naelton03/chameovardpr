@@ -49,6 +49,22 @@
             android:layout_marginBottom="12dp"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
 
+        <EditText
+            android:id="@+id/liveTitleInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:hint="@string/live_title_hint"
+            android:imeOptions="actionDone"
+            android:inputType="textCapSentences"
+            android:maxLines="1" />
+
+        <Spinner
+            android:id="@+id/privacySpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp" />
+
         <Button
             android:id="@+id/openFolderButton"
             android:layout_width="match_parent"

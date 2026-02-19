@@ -16,4 +16,9 @@
     <string name="live_created">Live RTMP preparada e conectada</string>
     <string name="live_stopped">Live RTMP encerrada</string>
     <string name="temperature_warning">Temperatura alta detectada (%.1f°C). Reduzindo bitrate da live.</string>
+    <string name="live_title_hint">Título da live</string>
+    <string name="default_live_title">ReplayCam Live</string>
+    <string name="privacy_public">public</string>
+    <string name="privacy_unlisted">unlisted</string>
+    <string name="privacy_private">private</string>
 </resources>

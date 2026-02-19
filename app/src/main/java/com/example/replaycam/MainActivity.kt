@@ -21,6 +21,7 @@ import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -197,6 +198,7 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
         binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
+        setupLiveConfigUi()
         updateLiveButtonUi(false)
         updateVideoPathLabel()
         clearSegmentCache()
@@ -304,10 +306,15 @@ class MainActivity : AppCompatActivity() {
             binding.toggleLiveButton.isEnabled = false
         }
 
+        val liveTitle = selectedLiveTitle()
+        val privacyStatus = selectedPrivacyStatus()
+
         runCatching {
             activeLiveSession ?: youtubeLiveHandler.createLiveSession(
                 safeAccount,
-                youtubeLiveHandler.lastIdToken ?: safeAccount.idToken
+                youtubeLiveHandler.lastIdToken ?: safeAccount.idToken,
+                liveTitle,
+                privacyStatus
             )
         }.onSuccess { session ->
             signedAccount = safeAccount
@@ -337,6 +344,29 @@ class MainActivity : AppCompatActivity() {
         binding.toggleLiveButton.text = if (isLive) getString(R.string.live_on) else getString(R.string.live_off)
         val color = if (isLive) android.R.color.holo_red_dark else android.R.color.darker_gray
         binding.toggleLiveButton.setBackgroundColor(ContextCompat.getColor(this, color))
+    }
+
+    private fun setupLiveConfigUi() {
+        val privacyOptions = listOf(
+            getString(R.string.privacy_public),
+            getString(R.string.privacy_unlisted),
+            getString(R.string.privacy_private)
+        )
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, privacyOptions)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.privacySpinner.adapter = adapter
+        binding.privacySpinner.setSelection(1)
+    }
+
+    private fun selectedLiveTitle(): String {
+        val typed = binding.liveTitleInput.text?.toString()?.trim().orEmpty()
+        return typed.ifBlank { getString(R.string.default_live_title) }
+    }
+
+    private fun selectedPrivacyStatus(): String {
+        return binding.privacySpinner.selectedItem?.toString()?.trim().orEmpty().ifBlank {
+            getString(R.string.privacy_unlisted)
+        }
     }
 
     private fun allPermissionsGranted(): Boolean {

@@ -155,13 +155,18 @@ class YouTubeLiveHandler(private val context: Context) {
             .joinToString(":") { "%02X".format(it) }
     }
 
-    suspend fun createLiveSession(account: GoogleSignInAccount, idToken: String?): LiveSessionInfo = withContext(Dispatchers.IO) {
+    suspend fun createLiveSession(
+        account: GoogleSignInAccount,
+        idToken: String?,
+        title: String,
+        privacyStatus: String
+    ): LiveSessionInfo = withContext(Dispatchers.IO) {
         runCatching {
             Log.i(tag, "createLiveSession start for account=${account.email}")
             ErrorFileLogger.logInfo(context, "YOUTUBE_CREATE_LIVE_SESSION", "iniciado para ${account.email}")
             val youtube = buildYouTubeService(account, idToken)
             val stream = createLiveStream(youtube)
-            val broadcast = createLiveBroadcast(youtube)
+            val broadcast = createLiveBroadcast(youtube, title, privacyStatus)
             bindBroadcastToStream(youtube, broadcast.id, stream.id)
             Log.i(tag, "createLiveSession done broadcastId=${broadcast.id} streamId=${stream.id}")
 
@@ -201,23 +206,25 @@ class YouTubeLiveHandler(private val context: Context) {
             .build()
     }
 
-    private fun createLiveBroadcast(youtube: YouTube): LiveBroadcast {
+    private fun createLiveBroadcast(youtube: YouTube, title: String, privacyStatus: String): LiveBroadcast {
         val titleStamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+        val normalizedTitle = title.trim().ifBlank { "ReplayCam Live $titleStamp" }
+        val normalizedPrivacy = privacyStatus.trim().lowercase(Locale.US).ifBlank { "unlisted" }
         val snippet = LiveBroadcastSnippet().apply {
-            title = "ReplayCam Live $titleStamp"
+            this.title = normalizedTitle
             scheduledStartTime = com.google.api.client.util.DateTime(System.currentTimeMillis() + 60_000)
         }
         val status = LiveBroadcastStatus().apply {
-            privacyStatus = "unlisted"
+            this.privacyStatus = normalizedPrivacy
             selfDeclaredMadeForKids = false
         }
         val contentDetails = LiveBroadcastContentDetails().apply {
             monitorStream = MonitorStreamInfo().setEnableMonitorStream(false)
             enableAutoStart = true
-            enableAutoStop = false
+            enableAutoStop = true
         }
 
-        Log.i(tag, "Creating YouTube liveBroadcast")
+        Log.i(tag, "Creating YouTube liveBroadcast title=$normalizedTitle privacy=$normalizedPrivacy")
         return youtube.liveBroadcasts()
             .insert(mutableListOf("snippet", "status", "contentDetails"), LiveBroadcast().apply {
                 this.snippet = snippet
