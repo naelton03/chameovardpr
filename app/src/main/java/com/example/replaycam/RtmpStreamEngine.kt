@@ -60,7 +60,7 @@ class RtmpStreamEngine(
             rtmpCamera.replaceView(openGlView)
             if (!rtmpCamera.isOnPreview) {
                 Log.w(tag, "Preview RTMP não estava ativo. Iniciando preview antes do stream")
-                rtmpCamera.startPreview(openGlView)
+                rtmpCamera.startPreview()
             }
 
             if (!prepareVideo()) {
