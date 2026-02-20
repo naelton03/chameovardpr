@@ -82,6 +82,7 @@ class MainActivity : AppCompatActivity() {
     private val segmentDurationMs = 20_000L
     private val maxSegments = 2
     private val segmentFiles = ArrayDeque<File>()
+    private val sessionSegmentFiles = ArrayDeque<File>()
     private val segmentLock = Any()
     private val diagnosticsLogLock = Any()
     private var isContinuousRecording = false
@@ -626,9 +627,9 @@ class MainActivity : AppCompatActivity() {
 
         synchronized(segmentLock) {
             segmentFiles.addLast(file)
+            sessionSegmentFiles.addLast(file)
             while (segmentFiles.size > maxSegments) {
-                val removed = segmentFiles.removeFirst()
-                removed.delete()
+                segmentFiles.removeFirst()
             }
         }
         val bufferedSeconds = segmentFiles.size * (segmentDurationMs / 1000)
@@ -658,21 +659,68 @@ class MainActivity : AppCompatActivity() {
     private fun stopContinuousRecording() {
         if (!isContinuousRecording) return
 
-        isStopping = true
-        isContinuousRecording = false
-        activeRecording?.stop()
-        activeRecording = null
+        lifecycleScope.launch {
+            isStopping = true
+            isContinuousRecording = false
+            pausedByBackground = false
+            shouldResumeAfterBackground = false
 
-        binding.startButton.isEnabled = true
-        binding.stopButton.isEnabled = false
-        binding.replayButton.isEnabled = false
-        pausedByBackground = false
-        shouldResumeAfterBackground = false
-        mainHandler.removeCallbacks(recordingTimerRunnable)
-        recordingStartedAtMs = 0L
-        updateRecordingTimer()
-        status("Status: gravação parada")
-        clearSegmentCache()
+            val waitForFinalize = CompletableDeferred<Unit>()
+            val recordingToStop = activeRecording
+            pendingSegmentFinalize = waitForFinalize
+            recordingToStop?.stop()
+            activeRecording = null
+            if (recordingToStop != null) {
+                runCatching { waitForFinalize.await() }
+            } else {
+                pendingSegmentFinalize = null
+            }
+
+            binding.startButton.isEnabled = true
+            binding.stopButton.isEnabled = false
+            binding.replayButton.isEnabled = false
+            mainHandler.removeCallbacks(recordingTimerRunnable)
+            recordingStartedAtMs = 0L
+            updateRecordingTimer()
+
+            saveFullRecordingFromSession()
+            status("Status: gravação parada")
+            clearSegmentCache()
+        }
+    }
+
+    private suspend fun saveFullRecordingFromSession() {
+        val snapshot = synchronized(segmentLock) { sessionSegmentFiles.toList() }
+        if (snapshot.isEmpty()) {
+            toast("Nenhum vídeo completo para salvar")
+            return
+        }
+
+        val stamp = timestamp()
+        val mergedOutput = File(getSegmentsDirectory(), "full_recording_${stamp}.mp4")
+        val merged = withContext(Dispatchers.IO) {
+            muxSegments(snapshot, mergedOutput, trimFromFirstUs = 0L)
+        }
+
+        if (!merged) {
+            status("Erro ao salvar gravação completa")
+            toast("Falha ao salvar gravação completa")
+            return
+        }
+
+        val outputName = "recording_${stamp}.mp4"
+        val savedUri = withContext(Dispatchers.IO) {
+            saveVideoToPublicGallery(mergedOutput, outputName)
+        }
+        mergedOutput.delete()
+
+        if (savedUri == null) {
+            status("Erro ao salvar gravação completa na galeria")
+            toast("Falha ao salvar gravação completa")
+            return
+        }
+
+        toast("Gravação completa salva em ${getPublicReplayPathLabel()}")
     }
 
     private fun saveReplayBundle() {
@@ -963,6 +1011,7 @@ class MainActivity : AppCompatActivity() {
         synchronized(segmentLock) {
             segmentFiles.forEach { it.delete() }
             segmentFiles.clear()
+            sessionSegmentFiles.clear()
         }
 
         val dir = getSegmentsDirectory()
