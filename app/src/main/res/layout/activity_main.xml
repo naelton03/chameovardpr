@@ -65,6 +65,21 @@
             android:layout_marginBottom="12dp"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
 
+
+        <TextView
+            android:id="@+id/cameraOptionsLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:text="Câmeras disponíveis"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+
+        <Spinner
+            android:id="@+id/cameraOptionsSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp" />
+
         <LinearLayout
             android:id="@+id/liveConfigContainer"
             android:layout_width="match_parent"

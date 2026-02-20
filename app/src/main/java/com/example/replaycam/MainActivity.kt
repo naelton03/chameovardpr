@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaMuxer
@@ -22,11 +24,14 @@ import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.util.Range
 import android.widget.ArrayAdapter
 import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -63,6 +68,20 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    data class RuntimeCameraCapability(
+        val cameraId: String,
+        val lensLabel: String,
+        val hasLogicalMultiCamera: Boolean,
+        val zoomRangeText: String,
+        val maxFps: Int,
+        val maxResolution: String
+    ) {
+        fun displayLabel(): String {
+            val multi = if (hasLogicalMultiCamera) "multi" else "single"
+            return "$lensLabel • $zoomRangeText • ${maxFps}fps • $maxResolution • $multi"
+        }
+    }
+
     private val tag = "MainActivity"
 
     private lateinit var binding: ActivityMainBinding
@@ -91,6 +110,9 @@ class MainActivity : AppCompatActivity() {
     private var recordingStartedAtMs: Long = 0L
     private var pausedByBackground = false
     private var shouldResumeAfterBackground = false
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var selectedCameraCapability: RuntimeCameraCapability? = null
+    private var availableCameraCapabilities: List<RuntimeCameraCapability> = emptyList()
     private val recordingTimerRunnable = object : Runnable {
         override fun run() {
             if (!isContinuousRecording) return
@@ -225,6 +247,7 @@ class MainActivity : AppCompatActivity() {
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         configureLiveUi()
         updateVideoPathLabel()
+        setupCameraCapabilityUi()
         clearSegmentCache()
         updateRecordingTimer()
 
@@ -510,40 +533,154 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        val providerFuture = ProcessCameraProvider.getInstance(this)
+        providerFuture.addListener({
+            val provider = providerFuture.get()
+            cameraProvider = provider
 
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.previewView.surfaceProvider)
+            if (availableCameraCapabilities.isEmpty()) {
+                setupCameraCapabilityUi()
             }
-
-            val qualitySelector = QualitySelector.fromOrderedList(
-                listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)
-            )
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(qualitySelector)
-                .build()
-
-            videoCapture = VideoCapture.withOutput(recorder)
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    videoCapture
-                )
-                status("Status: câmera pronta")
-            } catch (exc: Exception) {
-                ErrorFileLogger.logError(this, "START_CAMERA", exc)
-                appendDiagnosticLog("Erro ao abrir câmera: ${exc.message}", exc)
-                status("Erro ao abrir câmera: ${exc.message}")
-            }
+            bindSelectedCamera(provider)
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun setupCameraCapabilityUi() {
+        val capabilities = runCatching { detectCameraCapabilities() }.getOrElse { error ->
+            appendDiagnosticLog("Falha ao detectar câmeras: ${error.message}", error)
+            emptyList()
+        }
+        availableCameraCapabilities = capabilities
+
+        if (capabilities.isEmpty()) {
+            binding.cameraOptionsLabel.visibility = View.GONE
+            binding.cameraOptionsSpinner.visibility = View.GONE
+            selectedCameraCapability = null
+            return
+        }
+
+        binding.cameraOptionsLabel.visibility = View.VISIBLE
+        binding.cameraOptionsSpinner.visibility = View.VISIBLE
+
+        selectedCameraCapability = capabilities.firstOrNull()
+        val labels = capabilities.map { it.displayLabel() }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.cameraOptionsSpinner.adapter = adapter
+
+        binding.cameraOptionsSpinner.setSelection(0)
+        binding.cameraOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val newCapability = availableCameraCapabilities.getOrNull(position) ?: return
+                if (newCapability.cameraId == selectedCameraCapability?.cameraId) return
+                if (isContinuousRecording) {
+                    toast("Pare a gravação para trocar de câmera")
+                    binding.cameraOptionsSpinner.setSelection(
+                        availableCameraCapabilities.indexOfFirst { it.cameraId == selectedCameraCapability?.cameraId }
+                            .coerceAtLeast(0)
+                    )
+                    return
+                }
+
+                selectedCameraCapability = newCapability
+                cameraProvider?.let { bindSelectedCamera(it) }
+            }
+        }
+    }
+
+    private fun detectCameraCapabilities(): List<RuntimeCameraCapability> {
+        val cameraManager = getSystemService(CameraManager::class.java)
+        val result = mutableListOf<RuntimeCameraCapability>()
+
+        for (cameraId in cameraManager.cameraIdList) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            if (lensFacing != CameraCharacteristics.LENS_FACING_BACK) continue
+
+            val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES).orEmpty()
+            val hasLogicalMulti = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
+
+            val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            } else {
+                null
+            }
+            val zoomText = if (zoomRange != null) {
+                "zoom %.1fx-%.1fx".format(Locale.US, zoomRange.lower, zoomRange.upper)
+            } else {
+                val maxDigitalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+                "zoom 1.0x-%.1fx".format(Locale.US, maxDigitalZoom)
+            }
+
+            val maxFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.maxOfOrNull { range: Range<Int> -> range.upper } ?: 30
+
+            val maxResolution = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(android.graphics.SurfaceTexture::class.java)
+                ?.maxByOrNull { it.width * it.height }
+                ?.let { "${it.width}x${it.height}" }
+                ?: "n/a"
+
+            val lensLabel = when (characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()) {
+                null -> "Cam $cameraId"
+                else -> "Cam $cameraId"
+            }
+
+            result.add(
+                RuntimeCameraCapability(
+                    cameraId = cameraId,
+                    lensLabel = lensLabel,
+                    hasLogicalMultiCamera = hasLogicalMulti,
+                    zoomRangeText = zoomText,
+                    maxFps = maxFps,
+                    maxResolution = maxResolution
+                )
+            )
+        }
+
+        return result.sortedBy { it.cameraId }
+    }
+
+    private fun bindSelectedCamera(provider: ProcessCameraProvider) {
+        val preview = Preview.Builder().build().also {
+            it.setSurfaceProvider(binding.previewView.surfaceProvider)
+        }
+
+        val qualitySelector = QualitySelector.fromOrderedList(
+            listOf(Quality.FHD, Quality.HD, Quality.SD)
+        )
+
+        val recorder = Recorder.Builder()
+            .setQualitySelector(qualitySelector)
+            .build()
+
+        videoCapture = VideoCapture.withOutput(recorder)
+
+        val selectedId = selectedCameraCapability?.cameraId
+        val selector = if (selectedId == null) {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        } else {
+            CameraSelector.Builder()
+                .addCameraFilter { infos: MutableList<CameraInfo> ->
+                    infos.filter {
+                        runCatching { Camera2CameraInfo.from(it).cameraId == selectedId }.getOrDefault(false)
+                    }.toMutableList()
+                }
+                .build()
+        }
+
+        try {
+            provider.unbindAll()
+            provider.bindToLifecycle(this, selector, preview, videoCapture)
+            val cameraDescription = selectedCameraCapability?.displayLabel() ?: "traseira padrão"
+            status("Status: câmera pronta ($cameraDescription)")
+        } catch (exc: Exception) {
+            ErrorFileLogger.logError(this, "START_CAMERA", exc)
+            appendDiagnosticLog("Erro ao abrir câmera: ${exc.message}", exc)
+            status("Erro ao abrir câmera: ${exc.message}")
+        }
     }
 
     private fun startContinuousRecording(resetBuffer: Boolean) {
