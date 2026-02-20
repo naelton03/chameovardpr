@@ -599,7 +599,7 @@ class MainActivity : AppCompatActivity() {
             val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
             if (lensFacing != CameraCharacteristics.LENS_FACING_BACK) continue
 
-            val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES).orEmpty()
+            val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
             val hasLogicalMulti = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
 
             val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
