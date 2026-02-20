@@ -88,6 +88,8 @@ class MainActivity : AppCompatActivity() {
     private var isStopping = false
     private var pendingSegmentFinalize: CompletableDeferred<Unit>? = null
     private var recordingStartedAtMs: Long = 0L
+    private var pausedByBackground = false
+    private var shouldResumeAfterBackground = false
     private val recordingTimerRunnable = object : Runnable {
         override fun run() {
             if (!isContinuousRecording) return
@@ -215,14 +217,16 @@ class MainActivity : AppCompatActivity() {
         }
         signedAccount = GoogleSignIn.getLastSignedInAccount(this)
 
-        binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording() } }
+        binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording(resetBuffer = true) } }
         binding.stopButton.setOnClickListener { runUiAction("BTN_STOP_RECORDING") { stopContinuousRecording() } }
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
         binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         configureLiveUi()
         updateVideoPathLabel()
-        clearSegmentCache()
+        if (resetBuffer) {
+            clearSegmentCache()
+        }
         updateRecordingTimer()
 
         if (allPermissionsGranted()) {
@@ -543,7 +547,7 @@ class MainActivity : AppCompatActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun startContinuousRecording() {
+    private fun startContinuousRecording(resetBuffer: Boolean) {
         if (isContinuousRecording) return
 
         val capture = videoCapture ?: run {
@@ -551,7 +555,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        clearSegmentCache()
+        if (resetBuffer) {
+            clearSegmentCache()
+        }
         updateRecordingTimer()
         binding.replayButton.isEnabled = false
         isContinuousRecording = true
@@ -559,6 +565,8 @@ class MainActivity : AppCompatActivity() {
         binding.startButton.isEnabled = false
         binding.stopButton.isEnabled = true
         binding.replayButton.isEnabled = true
+        pausedByBackground = false
+        shouldResumeAfterBackground = false
         recordingStartedAtMs = SystemClock.elapsedRealtime()
         mainHandler.removeCallbacks(recordingTimerRunnable)
         mainHandler.post(recordingTimerRunnable)
@@ -629,6 +637,26 @@ class MainActivity : AppCompatActivity() {
         status("Status: buffer ativo (${bufferedSeconds}s)")
     }
 
+    private fun pauseContinuousRecordingForBackground() {
+        if (!isContinuousRecording) return
+
+        shouldResumeAfterBackground = true
+        pausedByBackground = true
+        isStopping = true
+        isContinuousRecording = false
+        activeRecording?.stop()
+        activeRecording = null
+
+        mainHandler.removeCallbacks(recordingTimerRunnable)
+        recordingStartedAtMs = 0L
+        updateRecordingTimer()
+
+        binding.startButton.isEnabled = true
+        binding.stopButton.isEnabled = false
+        binding.replayButton.isEnabled = false
+        status("Status: gravação pausada (app em segundo plano)")
+    }
+
     private fun stopContinuousRecording() {
         if (!isContinuousRecording) return
 
@@ -640,6 +668,8 @@ class MainActivity : AppCompatActivity() {
         binding.startButton.isEnabled = true
         binding.stopButton.isEnabled = false
         binding.replayButton.isEnabled = false
+        pausedByBackground = false
+        shouldResumeAfterBackground = false
         mainHandler.removeCallbacks(recordingTimerRunnable)
         recordingStartedAtMs = 0L
         updateRecordingTimer()
@@ -1001,6 +1031,25 @@ class MainActivity : AppCompatActivity() {
             }.onFailure { writeError ->
                 Log.e(tag, "Falha ao gravar log em arquivo", writeError)
             }
+        }
+    }
+
+    override fun onStop() {
+        if (isContinuousRecording) {
+            pauseContinuousRecordingForBackground()
+        }
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (shouldResumeAfterBackground && pausedByBackground && allPermissionsGranted()) {
+            mainHandler.postDelayed({
+                if (shouldResumeAfterBackground && pausedByBackground && !isContinuousRecording) {
+                    runUiAction("AUTO_RESUME_RECORDING") { startContinuousRecording(resetBuffer = false) }
+                    status("Status: gravação retomada automaticamente")
+                }
+            }, 500L)
         }
     }
 
