@@ -45,6 +45,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,13 +78,14 @@ class MainActivity : AppCompatActivity() {
     private var hasRetriedWithPlainRtmp = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val segmentDurationMs = 5_000L
-    private val maxSegments = 4
+    private val segmentDurationMs = 20_000L
+    private val maxSegments = 2
     private val segmentFiles = ArrayDeque<File>()
     private val segmentLock = Any()
     private val diagnosticsLogLock = Any()
     private var isContinuousRecording = false
     private var isStopping = false
+    private var pendingSegmentFinalize: CompletableDeferred<Unit>? = null
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -576,6 +578,9 @@ class MainActivity : AppCompatActivity() {
                     onSegmentSaved(segmentFile, event.outputResults.outputUri)
                 }
 
+                pendingSegmentFinalize?.complete(Unit)
+                pendingSegmentFinalize = null
+
                 if (isContinuousRecording && !isStopping) {
                     startSegment(capture)
                 }
@@ -605,7 +610,8 @@ class MainActivity : AppCompatActivity() {
                 removed.delete()
             }
         }
-        status("Status: buffer ativo (${segmentFiles.size * 5}s)")
+        val bufferedSeconds = segmentFiles.size * (segmentDurationMs / 1000)
+        status("Status: buffer ativo (${bufferedSeconds}s)")
     }
 
     private fun stopContinuousRecording() {
@@ -624,50 +630,116 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveReplayBundle() {
-        val snapshot = synchronized(segmentLock) { segmentFiles.toList() }
-        if (snapshot.size < maxSegments) {
-            toast("Aguarde preencher 20s no buffer")
-            return
-        }
+        lifecycleScope.launch {
+            binding.replayButton.isEnabled = false
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            val stamp = timestamp()
-            val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
-            val merged = mergeSegmentsIntoSingleVideo(snapshot, mergedReplay)
-            if (!merged) {
-                withContext(Dispatchers.Main) {
-                    status("Erro ao montar replay único")
-                    toast("Falha ao montar replay de 20s")
+            try {
+                rotateSegmentForReplayIfNeeded()
+                val snapshot = synchronized(segmentLock) { segmentFiles.toList() }
+                if (snapshot.isEmpty()) {
+                    toast("Ainda não há vídeo para salvar")
+                    return@launch
                 }
-                return@launch
-            }
 
-            val outputName = "replay_${stamp}.mp4"
-            val savedUri = saveVideoToPublicGallery(mergedReplay, outputName)
-            mergedReplay.delete()
+                val stamp = timestamp()
+                val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
+                val merged = withContext(Dispatchers.IO) {
+                    mergeLastWindowIntoSingleVideo(
+                        segments = snapshot,
+                        outputFile = mergedReplay,
+                        targetWindowUs = 20_000_000L
+                    )
+                }
 
-            withContext(Dispatchers.Main) {
+                if (!merged) {
+                    status("Erro ao montar replay único")
+                    toast("Falha ao montar replay")
+                    return@launch
+                }
+
+                val outputName = "replay_${stamp}.mp4"
+                val savedUri = withContext(Dispatchers.IO) {
+                    saveVideoToPublicGallery(mergedReplay, outputName)
+                }
+                mergedReplay.delete()
+
                 if (savedUri == null) {
                     status("Erro ao salvar replay na galeria")
                     toast("Falha ao salvar replay na galeria")
-                    return@withContext
+                    return@launch
                 }
 
-                status("Status: replay único salvo na galeria")
+                status("Status: replay salvo na galeria")
                 toast("Replay salvo em ${getPublicReplayPathLabel()}")
+            } finally {
+                binding.replayButton.isEnabled = isContinuousRecording
             }
         }
     }
 
-    private fun mergeSegmentsIntoSingleVideo(segments: List<File>, outputFile: File): Boolean {
+    private suspend fun rotateSegmentForReplayIfNeeded() {
+        if (!isContinuousRecording || isStopping) return
+
+        val waitForFinalize = CompletableDeferred<Unit>()
+        pendingSegmentFinalize = waitForFinalize
+        activeRecording?.stop()
+
+        runCatching { waitForFinalize.await() }
+            .onFailure { error ->
+                ErrorFileLogger.logError(this, "ROTATE_SEGMENT_REPLAY", error)
+                appendDiagnosticLog("Falha ao rotacionar segmento para replay: ${error.message}", error)
+            }
+    }
+
+    private fun mergeLastWindowIntoSingleVideo(
+        segments: List<File>,
+        outputFile: File,
+        targetWindowUs: Long
+    ): Boolean {
         if (segments.isEmpty()) return false
 
-        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val rotationDegrees = 90
-        muxer.setOrientationHint(rotationDegrees)
+        val validSegments = segments.filter { it.exists() && it.length() > 0L }
+        if (validSegments.isEmpty()) return false
 
-        val bufferSize = 2 * 1024 * 1024
-        val buffer = ByteBuffer.allocate(bufferSize)
+        val durationUsByFile = validSegments.associateWith { file -> getDurationUs(file) }
+        var accumulatedUs = 0L
+        val selected = ArrayDeque<File>()
+
+        for (segment in validSegments.asReversed()) {
+            selected.addFirst(segment)
+            accumulatedUs += durationUsByFile[segment] ?: 0L
+            if (accumulatedUs >= targetWindowUs) break
+        }
+
+        if (selected.isEmpty()) return false
+
+        val trimFromFirstUs = (accumulatedUs - targetWindowUs).coerceAtLeast(0L)
+        return muxSegments(selected.toList(), outputFile, trimFromFirstUs)
+    }
+
+    private fun getDurationUs(file: File): Long {
+        val extractor = MediaExtractor()
+        return runCatching {
+            extractor.setDataSource(file.absolutePath)
+            var durationUs = 0L
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                if (format.containsKey(android.media.MediaFormat.KEY_DURATION)) {
+                    val trackDuration = format.getLong(android.media.MediaFormat.KEY_DURATION)
+                    if (trackDuration > durationUs) durationUs = trackDuration
+                }
+            }
+            durationUs
+        }.getOrDefault(0L).also {
+            extractor.release()
+        }
+    }
+
+    private fun muxSegments(segments: List<File>, outputFile: File, trimFromFirstUs: Long): Boolean {
+        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        muxer.setOrientationHint(90)
+
+        val buffer = ByteBuffer.allocate(2 * 1024 * 1024)
         val videoInfo = MediaCodec.BufferInfo()
         val audioInfo = MediaCodec.BufferInfo()
 
@@ -678,9 +750,7 @@ class MainActivity : AppCompatActivity() {
         var audioPtsOffset = 0L
 
         try {
-            for (segment in segments) {
-                if (!segment.exists() || segment.length() == 0L) continue
-
+            segments.forEachIndexed { segmentIndex, segment ->
                 val extractor = MediaExtractor()
                 extractor.setDataSource(segment.absolutePath)
 
@@ -691,14 +761,10 @@ class MainActivity : AppCompatActivity() {
                     val mime = format.getString("mime") ?: continue
                     if (mime.startsWith("video/")) {
                         srcVideoTrack = i
-                        if (videoTrackIndex == -1) {
-                            videoTrackIndex = muxer.addTrack(format)
-                        }
+                        if (videoTrackIndex == -1) videoTrackIndex = muxer.addTrack(format)
                     } else if (mime.startsWith("audio/")) {
                         srcAudioTrack = i
-                        if (audioTrackIndex == -1) {
-                            audioTrackIndex = muxer.addTrack(format)
-                        }
+                        if (audioTrackIndex == -1) audioTrackIndex = muxer.addTrack(format)
                     }
                 }
 
@@ -709,22 +775,27 @@ class MainActivity : AppCompatActivity() {
 
                 if (!started) {
                     extractor.release()
-                    continue
+                    return@forEachIndexed
                 }
+
+                val trimUs = if (segmentIndex == 0) trimFromFirstUs else 0L
 
                 if (srcVideoTrack != -1 && videoTrackIndex != -1) {
                     extractor.selectTrack(srcVideoTrack)
-                    var lastPts = 0L
+                    var lastPts = videoPtsOffset
                     while (true) {
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
 
-                        videoInfo.offset = 0
-                        videoInfo.size = sampleSize
-                        videoInfo.presentationTimeUs = videoPtsOffset + extractor.sampleTime
-                        videoInfo.flags = extractor.sampleFlags
-                        muxer.writeSampleData(videoTrackIndex, buffer, videoInfo)
-                        lastPts = videoInfo.presentationTimeUs
+                        val sampleTime = extractor.sampleTime
+                        if (sampleTime >= trimUs) {
+                            videoInfo.offset = 0
+                            videoInfo.size = sampleSize
+                            videoInfo.presentationTimeUs = videoPtsOffset + (sampleTime - trimUs)
+                            videoInfo.flags = extractor.sampleFlags
+                            muxer.writeSampleData(videoTrackIndex, buffer, videoInfo)
+                            lastPts = videoInfo.presentationTimeUs
+                        }
                         extractor.advance()
                     }
                     extractor.unselectTrack(srcVideoTrack)
@@ -733,17 +804,20 @@ class MainActivity : AppCompatActivity() {
 
                 if (srcAudioTrack != -1 && audioTrackIndex != -1) {
                     extractor.selectTrack(srcAudioTrack)
-                    var lastPts = 0L
+                    var lastPts = audioPtsOffset
                     while (true) {
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
 
-                        audioInfo.offset = 0
-                        audioInfo.size = sampleSize
-                        audioInfo.presentationTimeUs = audioPtsOffset + extractor.sampleTime
-                        audioInfo.flags = extractor.sampleFlags
-                        muxer.writeSampleData(audioTrackIndex, buffer, audioInfo)
-                        lastPts = audioInfo.presentationTimeUs
+                        val sampleTime = extractor.sampleTime
+                        if (sampleTime >= trimUs) {
+                            audioInfo.offset = 0
+                            audioInfo.size = sampleSize
+                            audioInfo.presentationTimeUs = audioPtsOffset + (sampleTime - trimUs)
+                            audioInfo.flags = extractor.sampleFlags
+                            muxer.writeSampleData(audioTrackIndex, buffer, audioInfo)
+                            lastPts = audioInfo.presentationTimeUs
+                        }
                         extractor.advance()
                     }
                     extractor.unselectTrack(srcAudioTrack)
@@ -757,14 +831,8 @@ class MainActivity : AppCompatActivity() {
             appendDiagnosticLog("Erro ao juntar segmentos: ${error.message}", error)
             return false
         } finally {
-            try {
-                if (started) muxer.stop()
-            } catch (_: Exception) {
-            }
-            try {
-                muxer.release()
-            } catch (_: Exception) {
-            }
+            runCatching { if (started) muxer.stop() }
+            runCatching { muxer.release() }
         }
 
         return outputFile.exists() && outputFile.length() > 0
