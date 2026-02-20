@@ -224,9 +224,7 @@ class MainActivity : AppCompatActivity() {
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         configureLiveUi()
         updateVideoPathLabel()
-        if (resetBuffer) {
-            clearSegmentCache()
-        }
+        clearSegmentCache()
         updateRecordingTimer()
 
         if (allPermissionsGranted()) {
