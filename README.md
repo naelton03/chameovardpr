@@ -138,3 +138,11 @@ bash scripts/download_ci_artifact_and_install.sh meuusuario/replaycam main
 Requisitos desse fluxo: `gh` autenticado, `jq`, `adb` e device Android conectado.
 
 Se `ref` não for informado, o script usa a branch atual local (quando disponível) e, em último caso, a branch padrão do repositório.
+
+## Documentação funcional
+
+- Veja o detalhamento atualizado em `docs/funcionalidades-atuais.md`.
+
+## UI React Native (referência visual)
+
+- Exemplo de refactor para estilo nativo de câmera: `docs/react-native-replaycam-ui-refactor.tsx`.
