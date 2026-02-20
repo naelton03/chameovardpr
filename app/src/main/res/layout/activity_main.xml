@@ -24,6 +24,22 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+
+    <TextView
+        android:id="@+id/recordingTimerText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="12dp"
+        android:background="@android:color/transparent"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:text="00:00"
+        android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+        android:textColor="@android:color/white"
+        app:layout_constraintBottom_toTopOf="@id/controlContainer"
+        app:layout_constraintEnd_toEndOf="parent" />
+
     <LinearLayout
         android:id="@+id/controlContainer"
         android:layout_width="0dp"
@@ -49,7 +65,28 @@
             android:layout_marginBottom="12dp"
             android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
 
-        <EditText
+
+        <TextView
+            android:id="@+id/cameraOptionsLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:text="Câmeras disponíveis"
+            android:textAppearance="@style/TextAppearance.Material3.BodySmall" />
+
+        <Spinner
+            android:id="@+id/cameraOptionsSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp" />
+
+        <LinearLayout
+            android:id="@+id/liveConfigContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <EditText
             android:id="@+id/liveTitleInput"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -64,6 +101,8 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="12dp" />
+
+        </LinearLayout>
 
         <Button
             android:id="@+id/openFolderButton"

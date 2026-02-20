@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaMuxer
@@ -18,13 +20,18 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
+import android.util.Range
 import android.widget.ArrayAdapter
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -44,6 +51,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,6 +68,20 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    data class RuntimeCameraCapability(
+        val cameraId: String,
+        val lensLabel: String,
+        val hasLogicalMultiCamera: Boolean,
+        val zoomRangeText: String,
+        val maxFps: Int,
+        val maxResolution: String
+    ) {
+        fun displayLabel(): String {
+            val multi = if (hasLogicalMultiCamera) "multi" else "single"
+            return "$lensLabel • $zoomRangeText • ${maxFps}fps • $maxResolution • $multi"
+        }
+    }
+
     private val tag = "MainActivity"
 
     private lateinit var binding: ActivityMainBinding
@@ -67,7 +89,7 @@ class MainActivity : AppCompatActivity() {
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
 
-    private lateinit var youtubeLiveHandler: YouTubeLiveHandler
+    private var youtubeLiveHandler: YouTubeLiveHandler? = null
     private var rtmpStreamEngine: RtmpStreamEngine? = null
     private var signedAccount: GoogleSignInAccount? = null
     private var activeLiveSession: LiveSessionInfo? = null
@@ -76,13 +98,28 @@ class MainActivity : AppCompatActivity() {
     private var hasRetriedWithPlainRtmp = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val segmentDurationMs = 5_000L
-    private val maxSegments = 4
+    private val segmentDurationMs = 20_000L
+    private val maxSegments = 2
     private val segmentFiles = ArrayDeque<File>()
+    private val sessionSegmentFiles = ArrayDeque<File>()
     private val segmentLock = Any()
     private val diagnosticsLogLock = Any()
     private var isContinuousRecording = false
     private var isStopping = false
+    private var pendingSegmentFinalize: CompletableDeferred<Unit>? = null
+    private var recordingStartedAtMs: Long = 0L
+    private var pausedByBackground = false
+    private var shouldResumeAfterBackground = false
+    private var cameraProvider: ProcessCameraProvider? = null
+    private var selectedCameraCapability: RuntimeCameraCapability? = null
+    private var availableCameraCapabilities: List<RuntimeCameraCapability> = emptyList()
+    private val recordingTimerRunnable = object : Runnable {
+        override fun run() {
+            if (!isContinuousRecording) return
+            updateRecordingTimer()
+            mainHandler.postDelayed(this, 1_000L)
+        }
+    }
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -123,13 +160,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val signInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val parsedAccount = youtubeLiveHandler.parseSignInResult(result.data)
+        if (!FeatureToggles.isLiveEnabled) return@registerForActivityResult
+
+        val liveHandler = youtubeLiveHandler ?: return@registerForActivityResult
+        val parsedAccount = liveHandler.parseSignInResult(result.data)
         val fallbackAccount = GoogleSignIn.getLastSignedInAccount(this)
         val account = parsedAccount ?: fallbackAccount
 
         if (account != null) {
             signedAccount = account
-            val idToken = youtubeLiveHandler.lastIdToken ?: account.idToken
+            val idToken = liveHandler.lastIdToken ?: account.idToken
             if (idToken.isNullOrBlank()) {
                 appendDiagnosticLog("Google Sign-In concluído sem idToken. Verifique google_web_client_id (Web Client).")
                 ErrorFileLogger.logInfo(this, "GOOGLE_SIGN_IN_ID_TOKEN", "idToken ausente")
@@ -143,7 +183,7 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        val signInStatusCode = youtubeLiveHandler.lastSignInStatusCode
+        val signInStatusCode = liveHandler.lastSignInStatusCode
         if (result.resultCode == RESULT_CANCELED && signInStatusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
             Log.w(tag, "Google login cancelado pelo usuário")
             appendDiagnosticLog("Google Sign-In cancelado pelo usuário")
@@ -151,13 +191,13 @@ class MainActivity : AppCompatActivity() {
             return@registerForActivityResult
         }
 
-        val hint = youtubeLiveHandler.signInErrorHint(signInStatusCode)
+        val hint = liveHandler.signInErrorHint(signInStatusCode)
         Log.e(tag, "Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode hint=$hint")
         appendDiagnosticLog("Falha ao autenticar Google. resultCode=${result.resultCode} statusCode=$signInStatusCode hint=$hint")
         if (signInStatusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
-            val oauthDebugInfo = youtubeLiveHandler.oauthDebugInfo()
+            val oauthDebugInfo = liveHandler.oauthDebugInfo()
             appendDiagnosticLog("GOOGLE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
-            appendDiagnosticLog(youtubeLiveHandler.oauthSetupChecklist())
+            appendDiagnosticLog(liveHandler.oauthSetupChecklist())
             status("Erro OAuth (10): ajuste package/SHA-1/SHA-256 no Google Cloud")
             toast(getString(R.string.oauth_developer_error))
         } else {
@@ -194,19 +234,22 @@ class MainActivity : AppCompatActivity() {
         ensureRootLogPermission()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
-        youtubeLiveHandler = YouTubeLiveHandler(this)
-        rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
+        if (FeatureToggles.isLiveEnabled) {
+            youtubeLiveHandler = YouTubeLiveHandler(this)
+            rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
+        }
         signedAccount = GoogleSignIn.getLastSignedInAccount(this)
 
-        binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording() } }
+        binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording(resetBuffer = true) } }
         binding.stopButton.setOnClickListener { runUiAction("BTN_STOP_RECORDING") { stopContinuousRecording() } }
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
         binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
-        setupLiveConfigUi()
-        updateLiveButtonUi(false)
+        configureLiveUi()
         updateVideoPathLabel()
+        setupCameraCapabilityUi()
         clearSegmentCache()
+        updateRecordingTimer()
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -215,6 +258,21 @@ class MainActivity : AppCompatActivity() {
         }
 
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }
+
+    private fun configureLiveUi() {
+        if (!FeatureToggles.isLiveEnabled) {
+            binding.liveConfigContainer.visibility = View.GONE
+            binding.toggleLiveButton.visibility = View.GONE
+            binding.streamSurface.visibility = View.GONE
+            return
+        }
+
+        binding.liveConfigContainer.visibility = View.VISIBLE
+        binding.toggleLiveButton.visibility = View.VISIBLE
+        binding.streamSurface.visibility = View.VISIBLE
+        setupLiveConfigUi()
+        updateLiveButtonUi(false)
     }
 
     private val streamCallbacks = object : RtmpStreamEngine.Callbacks {
@@ -243,9 +301,10 @@ class MainActivity : AppCompatActivity() {
                     status("Status: mídia detectada, verificando transição no YouTube...")
                 }
 
-                val transitioned = youtubeLiveHandler.transitionBroadcastToLive(
+                val liveHandler = youtubeLiveHandler ?: return@launch
+                val transitioned = liveHandler.transitionBroadcastToLive(
                     account = account,
-                    idToken = youtubeLiveHandler.lastIdToken ?: account.idToken,
+                    idToken = liveHandler.lastIdToken ?: account.idToken,
                     broadcastId = session.broadcastId
                 )
 
@@ -314,7 +373,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleLiveToggleClick() {
+        if (!FeatureToggles.isLiveEnabled) return
+
         val streamer = rtmpStreamEngine ?: return
+        val liveHandler = youtubeLiveHandler ?: return
 
         if (streamer.isStreaming()) {
             Log.i(tag, "Solicitado stop da live")
@@ -328,10 +390,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        if (signedAccount == null && !youtubeLiveHandler.isAuthenticated()) {
+        if (signedAccount == null && !liveHandler.isAuthenticated()) {
             toast(getString(R.string.live_requires_auth))
             Log.i(tag, "Iniciando fluxo OAuth Google Sign-In")
-            signInLauncher.launch(youtubeLiveHandler.authIntent())
+            signInLauncher.launch(liveHandler.authIntent())
             return
         }
 
@@ -341,6 +403,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun startLiveFlow(account: GoogleSignInAccount?) {
+        if (!FeatureToggles.isLiveEnabled) return
+
+        val liveHandler = youtubeLiveHandler ?: return
         val safeAccount = account ?: run {
             toast(getString(R.string.live_requires_auth))
             return
@@ -361,9 +426,9 @@ class MainActivity : AppCompatActivity() {
         val privacyStatus = selectedPrivacyStatus()
 
         runCatching {
-            activeLiveSession ?: youtubeLiveHandler.createLiveSession(
+            activeLiveSession ?: liveHandler.createLiveSession(
                 safeAccount,
-                youtubeLiveHandler.lastIdToken ?: safeAccount.idToken,
+                liveHandler.lastIdToken ?: safeAccount.idToken,
                 liveTitle,
                 privacyStatus
             )
@@ -397,12 +462,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateLiveButtonUi(isLive: Boolean) {
+        if (!FeatureToggles.isLiveEnabled) return
         binding.toggleLiveButton.text = if (isLive) getString(R.string.live_on) else getString(R.string.live_off)
         val color = if (isLive) android.R.color.holo_red_dark else android.R.color.darker_gray
         binding.toggleLiveButton.setBackgroundColor(ContextCompat.getColor(this, color))
     }
 
     private fun setupLiveConfigUi() {
+        if (!FeatureToggles.isLiveEnabled) return
         val privacyOptions = listOf(
             getString(R.string.privacy_public),
             getString(R.string.privacy_unlisted),
@@ -415,11 +482,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun selectedLiveTitle(): String {
+        if (!FeatureToggles.isLiveEnabled) return getString(R.string.default_live_title)
         val typed = binding.liveTitleInput.text?.toString()?.trim().orEmpty()
         return typed.ifBlank { getString(R.string.default_live_title) }
     }
 
     private fun selectedPrivacyStatus(): String {
+        if (!FeatureToggles.isLiveEnabled) return getString(R.string.privacy_unlisted)
         return binding.privacySpinner.selectedItem?.toString()?.trim().orEmpty().ifBlank {
             getString(R.string.privacy_unlisted)
         }
@@ -464,43 +533,157 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        val providerFuture = ProcessCameraProvider.getInstance(this)
+        providerFuture.addListener({
+            val provider = providerFuture.get()
+            cameraProvider = provider
 
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-
-            val preview = Preview.Builder().build().also {
-                it.setSurfaceProvider(binding.previewView.surfaceProvider)
+            if (availableCameraCapabilities.isEmpty()) {
+                setupCameraCapabilityUi()
             }
-
-            val qualitySelector = QualitySelector.fromOrderedList(
-                listOf(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD)
-            )
-
-            val recorder = Recorder.Builder()
-                .setQualitySelector(qualitySelector)
-                .build()
-
-            videoCapture = VideoCapture.withOutput(recorder)
-
-            try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this,
-                    CameraSelector.DEFAULT_BACK_CAMERA,
-                    preview,
-                    videoCapture
-                )
-                status("Status: câmera pronta")
-            } catch (exc: Exception) {
-                ErrorFileLogger.logError(this, "START_CAMERA", exc)
-                appendDiagnosticLog("Erro ao abrir câmera: ${exc.message}", exc)
-                status("Erro ao abrir câmera: ${exc.message}")
-            }
+            bindSelectedCamera(provider)
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun startContinuousRecording() {
+    private fun setupCameraCapabilityUi() {
+        val capabilities = runCatching { detectCameraCapabilities() }.getOrElse { error ->
+            appendDiagnosticLog("Falha ao detectar câmeras: ${error.message}", error)
+            emptyList()
+        }
+        availableCameraCapabilities = capabilities
+
+        if (capabilities.isEmpty()) {
+            binding.cameraOptionsLabel.visibility = View.GONE
+            binding.cameraOptionsSpinner.visibility = View.GONE
+            selectedCameraCapability = null
+            return
+        }
+
+        binding.cameraOptionsLabel.visibility = View.VISIBLE
+        binding.cameraOptionsSpinner.visibility = View.VISIBLE
+
+        selectedCameraCapability = capabilities.firstOrNull()
+        val labels = capabilities.map { it.displayLabel() }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.cameraOptionsSpinner.adapter = adapter
+
+        binding.cameraOptionsSpinner.setSelection(0)
+        binding.cameraOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val newCapability = availableCameraCapabilities.getOrNull(position) ?: return
+                if (newCapability.cameraId == selectedCameraCapability?.cameraId) return
+                if (isContinuousRecording) {
+                    toast("Pare a gravação para trocar de câmera")
+                    binding.cameraOptionsSpinner.setSelection(
+                        availableCameraCapabilities.indexOfFirst { it.cameraId == selectedCameraCapability?.cameraId }
+                            .coerceAtLeast(0)
+                    )
+                    return
+                }
+
+                selectedCameraCapability = newCapability
+                cameraProvider?.let { bindSelectedCamera(it) }
+            }
+        }
+    }
+
+    private fun detectCameraCapabilities(): List<RuntimeCameraCapability> {
+        val cameraManager = getSystemService(CameraManager::class.java)
+        val result = mutableListOf<RuntimeCameraCapability>()
+
+        for (cameraId in cameraManager.cameraIdList) {
+            val characteristics = cameraManager.getCameraCharacteristics(cameraId)
+            val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
+            if (lensFacing != CameraCharacteristics.LENS_FACING_BACK) continue
+
+            val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+            val hasLogicalMulti = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
+
+            val zoomRange = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            } else {
+                null
+            }
+            val zoomText = if (zoomRange != null) {
+                "zoom %.1fx-%.1fx".format(Locale.US, zoomRange.lower, zoomRange.upper)
+            } else {
+                val maxDigitalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
+                "zoom 1.0x-%.1fx".format(Locale.US, maxDigitalZoom)
+            }
+
+            val maxFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.maxOfOrNull { range: Range<Int> -> range.upper } ?: 30
+
+            val maxResolution = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?.getOutputSizes(android.graphics.SurfaceTexture::class.java)
+                ?.maxByOrNull { it.width * it.height }
+                ?.let { "${it.width}x${it.height}" }
+                ?: "n/a"
+
+            val lensLabel = when (characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()) {
+                null -> "Cam $cameraId"
+                else -> "Cam $cameraId"
+            }
+
+            result.add(
+                RuntimeCameraCapability(
+                    cameraId = cameraId,
+                    lensLabel = lensLabel,
+                    hasLogicalMultiCamera = hasLogicalMulti,
+                    zoomRangeText = zoomText,
+                    maxFps = maxFps,
+                    maxResolution = maxResolution
+                )
+            )
+        }
+
+        return result.sortedBy { it.cameraId }
+    }
+
+    private fun bindSelectedCamera(provider: ProcessCameraProvider) {
+        val preview = Preview.Builder().build().also {
+            it.setSurfaceProvider(binding.previewView.surfaceProvider)
+        }
+
+        val qualitySelector = QualitySelector.fromOrderedList(
+            listOf(Quality.FHD, Quality.HD, Quality.SD)
+        )
+
+        val recorder = Recorder.Builder()
+            .setQualitySelector(qualitySelector)
+            .build()
+
+        videoCapture = VideoCapture.withOutput(recorder)
+
+        val selectedId = selectedCameraCapability?.cameraId
+        val selector = if (selectedId == null) {
+            CameraSelector.DEFAULT_BACK_CAMERA
+        } else {
+            CameraSelector.Builder()
+                .addCameraFilter { infos: MutableList<CameraInfo> ->
+                    infos.filter {
+                        runCatching { Camera2CameraInfo.from(it).cameraId == selectedId }.getOrDefault(false)
+                    }.toMutableList()
+                }
+                .build()
+        }
+
+        try {
+            provider.unbindAll()
+            provider.bindToLifecycle(this, selector, preview, videoCapture)
+            val cameraDescription = selectedCameraCapability?.displayLabel() ?: "traseira padrão"
+            status("Status: câmera pronta ($cameraDescription)")
+        } catch (exc: Exception) {
+            ErrorFileLogger.logError(this, "START_CAMERA", exc)
+            appendDiagnosticLog("Erro ao abrir câmera: ${exc.message}", exc)
+            status("Erro ao abrir câmera: ${exc.message}")
+        }
+    }
+
+    private fun startContinuousRecording(resetBuffer: Boolean) {
         if (isContinuousRecording) return
 
         val capture = videoCapture ?: run {
@@ -508,13 +691,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        clearSegmentCache()
+        if (resetBuffer) {
+            clearSegmentCache()
+        }
+        updateRecordingTimer()
         binding.replayButton.isEnabled = false
         isContinuousRecording = true
         isStopping = false
         binding.startButton.isEnabled = false
         binding.stopButton.isEnabled = true
         binding.replayButton.isEnabled = true
+        pausedByBackground = false
+        shouldResumeAfterBackground = false
+        recordingStartedAtMs = SystemClock.elapsedRealtime()
+        mainHandler.removeCallbacks(recordingTimerRunnable)
+        mainHandler.post(recordingTimerRunnable)
+        updateRecordingTimer()
         status("Status: gravando continuamente")
 
         startSegment(capture)
@@ -545,6 +737,9 @@ class MainActivity : AppCompatActivity() {
                     onSegmentSaved(segmentFile, event.outputResults.outputUri)
                 }
 
+                pendingSegmentFinalize?.complete(Unit)
+                pendingSegmentFinalize = null
+
                 if (isContinuousRecording && !isStopping) {
                     startSegment(capture)
                 }
@@ -569,74 +764,213 @@ class MainActivity : AppCompatActivity() {
 
         synchronized(segmentLock) {
             segmentFiles.addLast(file)
+            sessionSegmentFiles.addLast(file)
             while (segmentFiles.size > maxSegments) {
-                val removed = segmentFiles.removeFirst()
-                removed.delete()
+                segmentFiles.removeFirst()
             }
         }
-        status("Status: buffer ativo (${segmentFiles.size * 5}s)")
+        val bufferedSeconds = segmentFiles.size * (segmentDurationMs / 1000)
+        status("Status: buffer ativo (${bufferedSeconds}s)")
     }
 
-    private fun stopContinuousRecording() {
+    private fun pauseContinuousRecordingForBackground() {
         if (!isContinuousRecording) return
 
+        shouldResumeAfterBackground = true
+        pausedByBackground = true
         isStopping = true
         isContinuousRecording = false
         activeRecording?.stop()
         activeRecording = null
 
+        mainHandler.removeCallbacks(recordingTimerRunnable)
+        recordingStartedAtMs = 0L
+        updateRecordingTimer()
+
         binding.startButton.isEnabled = true
         binding.stopButton.isEnabled = false
         binding.replayButton.isEnabled = false
-        status("Status: gravação parada")
-        clearSegmentCache()
+        status("Status: gravação pausada (app em segundo plano)")
     }
 
-    private fun saveReplayBundle() {
-        val snapshot = synchronized(segmentLock) { segmentFiles.toList() }
-        if (snapshot.size < maxSegments) {
-            toast("Aguarde preencher 20s no buffer")
+    private fun stopContinuousRecording() {
+        if (!isContinuousRecording) return
+
+        lifecycleScope.launch {
+            isStopping = true
+            isContinuousRecording = false
+            pausedByBackground = false
+            shouldResumeAfterBackground = false
+
+            val waitForFinalize = CompletableDeferred<Unit>()
+            val recordingToStop = activeRecording
+            pendingSegmentFinalize = waitForFinalize
+            recordingToStop?.stop()
+            activeRecording = null
+            if (recordingToStop != null) {
+                runCatching { waitForFinalize.await() }
+            } else {
+                pendingSegmentFinalize = null
+            }
+
+            binding.startButton.isEnabled = true
+            binding.stopButton.isEnabled = false
+            binding.replayButton.isEnabled = false
+            mainHandler.removeCallbacks(recordingTimerRunnable)
+            recordingStartedAtMs = 0L
+            updateRecordingTimer()
+
+            saveFullRecordingFromSession()
+            status("Status: gravação parada")
+            clearSegmentCache()
+        }
+    }
+
+    private suspend fun saveFullRecordingFromSession() {
+        val snapshot = synchronized(segmentLock) { sessionSegmentFiles.toList() }
+        if (snapshot.isEmpty()) {
+            toast("Nenhum vídeo completo para salvar")
             return
         }
 
-        lifecycleScope.launch(Dispatchers.IO) {
-            val stamp = timestamp()
-            val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
-            val merged = mergeSegmentsIntoSingleVideo(snapshot, mergedReplay)
-            if (!merged) {
-                withContext(Dispatchers.Main) {
-                    status("Erro ao montar replay único")
-                    toast("Falha ao montar replay de 20s")
+        val stamp = timestamp()
+        val mergedOutput = File(getSegmentsDirectory(), "full_recording_${stamp}.mp4")
+        val merged = withContext(Dispatchers.IO) {
+            muxSegments(snapshot, mergedOutput, trimFromFirstUs = 0L)
+        }
+
+        if (!merged) {
+            status("Erro ao salvar gravação completa")
+            toast("Falha ao salvar gravação completa")
+            return
+        }
+
+        val outputName = "recording_${stamp}.mp4"
+        val savedUri = withContext(Dispatchers.IO) {
+            saveVideoToPublicGallery(mergedOutput, outputName)
+        }
+        mergedOutput.delete()
+
+        if (savedUri == null) {
+            status("Erro ao salvar gravação completa na galeria")
+            toast("Falha ao salvar gravação completa")
+            return
+        }
+
+        toast("Gravação completa salva em ${getPublicReplayPathLabel()}")
+    }
+
+    private fun saveReplayBundle() {
+        lifecycleScope.launch {
+            binding.replayButton.isEnabled = false
+
+            try {
+                rotateSegmentForReplayIfNeeded()
+                val snapshot = synchronized(segmentLock) { segmentFiles.toList() }
+                if (snapshot.isEmpty()) {
+                    toast("Ainda não há vídeo para salvar")
+                    return@launch
                 }
-                return@launch
-            }
 
-            val outputName = "replay_${stamp}.mp4"
-            val savedUri = saveVideoToPublicGallery(mergedReplay, outputName)
-            mergedReplay.delete()
+                val stamp = timestamp()
+                val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
+                val merged = withContext(Dispatchers.IO) {
+                    mergeLastWindowIntoSingleVideo(
+                        segments = snapshot,
+                        outputFile = mergedReplay,
+                        targetWindowUs = 20_000_000L
+                    )
+                }
 
-            withContext(Dispatchers.Main) {
+                if (!merged) {
+                    status("Erro ao montar replay único")
+                    toast("Falha ao montar replay")
+                    return@launch
+                }
+
+                val outputName = "replay_${stamp}.mp4"
+                val savedUri = withContext(Dispatchers.IO) {
+                    saveVideoToPublicGallery(mergedReplay, outputName)
+                }
+                mergedReplay.delete()
+
                 if (savedUri == null) {
                     status("Erro ao salvar replay na galeria")
                     toast("Falha ao salvar replay na galeria")
-                    return@withContext
+                    return@launch
                 }
 
-                status("Status: replay único salvo na galeria")
+                status("Status: replay salvo na galeria")
                 toast("Replay salvo em ${getPublicReplayPathLabel()}")
+            } finally {
+                binding.replayButton.isEnabled = isContinuousRecording
             }
         }
     }
 
-    private fun mergeSegmentsIntoSingleVideo(segments: List<File>, outputFile: File): Boolean {
+    private suspend fun rotateSegmentForReplayIfNeeded() {
+        if (!isContinuousRecording || isStopping) return
+
+        val waitForFinalize = CompletableDeferred<Unit>()
+        pendingSegmentFinalize = waitForFinalize
+        activeRecording?.stop()
+
+        runCatching { waitForFinalize.await() }
+            .onFailure { error ->
+                ErrorFileLogger.logError(this, "ROTATE_SEGMENT_REPLAY", error)
+                appendDiagnosticLog("Falha ao rotacionar segmento para replay: ${error.message}", error)
+            }
+    }
+
+    private fun mergeLastWindowIntoSingleVideo(
+        segments: List<File>,
+        outputFile: File,
+        targetWindowUs: Long
+    ): Boolean {
         if (segments.isEmpty()) return false
 
-        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-        val rotationDegrees = 90
-        muxer.setOrientationHint(rotationDegrees)
+        val validSegments = segments.filter { it.exists() && it.length() > 0L }
+        if (validSegments.isEmpty()) return false
 
-        val bufferSize = 2 * 1024 * 1024
-        val buffer = ByteBuffer.allocate(bufferSize)
+        val durationUsByFile = validSegments.associateWith { file -> getDurationUs(file) }
+        var accumulatedUs = 0L
+        val selected = ArrayDeque<File>()
+
+        for (segment in validSegments.asReversed()) {
+            selected.addFirst(segment)
+            accumulatedUs += durationUsByFile[segment] ?: 0L
+            if (accumulatedUs >= targetWindowUs) break
+        }
+
+        if (selected.isEmpty()) return false
+
+        val trimFromFirstUs = (accumulatedUs - targetWindowUs).coerceAtLeast(0L)
+        return muxSegments(selected.toList(), outputFile, trimFromFirstUs)
+    }
+
+    private fun getDurationUs(file: File): Long {
+        val extractor = MediaExtractor()
+        return runCatching {
+            extractor.setDataSource(file.absolutePath)
+            var durationUs = 0L
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                if (format.containsKey(android.media.MediaFormat.KEY_DURATION)) {
+                    val trackDuration = format.getLong(android.media.MediaFormat.KEY_DURATION)
+                    if (trackDuration > durationUs) durationUs = trackDuration
+                }
+            }
+            durationUs
+        }.getOrDefault(0L).also {
+            extractor.release()
+        }
+    }
+
+    private fun muxSegments(segments: List<File>, outputFile: File, trimFromFirstUs: Long): Boolean {
+        val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+        muxer.setOrientationHint(90)
+
+        val buffer = ByteBuffer.allocate(2 * 1024 * 1024)
         val videoInfo = MediaCodec.BufferInfo()
         val audioInfo = MediaCodec.BufferInfo()
 
@@ -647,9 +981,7 @@ class MainActivity : AppCompatActivity() {
         var audioPtsOffset = 0L
 
         try {
-            for (segment in segments) {
-                if (!segment.exists() || segment.length() == 0L) continue
-
+            segments.forEachIndexed { segmentIndex, segment ->
                 val extractor = MediaExtractor()
                 extractor.setDataSource(segment.absolutePath)
 
@@ -660,14 +992,10 @@ class MainActivity : AppCompatActivity() {
                     val mime = format.getString("mime") ?: continue
                     if (mime.startsWith("video/")) {
                         srcVideoTrack = i
-                        if (videoTrackIndex == -1) {
-                            videoTrackIndex = muxer.addTrack(format)
-                        }
+                        if (videoTrackIndex == -1) videoTrackIndex = muxer.addTrack(format)
                     } else if (mime.startsWith("audio/")) {
                         srcAudioTrack = i
-                        if (audioTrackIndex == -1) {
-                            audioTrackIndex = muxer.addTrack(format)
-                        }
+                        if (audioTrackIndex == -1) audioTrackIndex = muxer.addTrack(format)
                     }
                 }
 
@@ -678,22 +1006,27 @@ class MainActivity : AppCompatActivity() {
 
                 if (!started) {
                     extractor.release()
-                    continue
+                    return@forEachIndexed
                 }
+
+                val trimUs = if (segmentIndex == 0) trimFromFirstUs else 0L
 
                 if (srcVideoTrack != -1 && videoTrackIndex != -1) {
                     extractor.selectTrack(srcVideoTrack)
-                    var lastPts = 0L
+                    var lastPts = videoPtsOffset
                     while (true) {
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
 
-                        videoInfo.offset = 0
-                        videoInfo.size = sampleSize
-                        videoInfo.presentationTimeUs = videoPtsOffset + extractor.sampleTime
-                        videoInfo.flags = extractor.sampleFlags
-                        muxer.writeSampleData(videoTrackIndex, buffer, videoInfo)
-                        lastPts = videoInfo.presentationTimeUs
+                        val sampleTime = extractor.sampleTime
+                        if (sampleTime >= trimUs) {
+                            videoInfo.offset = 0
+                            videoInfo.size = sampleSize
+                            videoInfo.presentationTimeUs = videoPtsOffset + (sampleTime - trimUs)
+                            videoInfo.flags = extractor.sampleFlags
+                            muxer.writeSampleData(videoTrackIndex, buffer, videoInfo)
+                            lastPts = videoInfo.presentationTimeUs
+                        }
                         extractor.advance()
                     }
                     extractor.unselectTrack(srcVideoTrack)
@@ -702,17 +1035,20 @@ class MainActivity : AppCompatActivity() {
 
                 if (srcAudioTrack != -1 && audioTrackIndex != -1) {
                     extractor.selectTrack(srcAudioTrack)
-                    var lastPts = 0L
+                    var lastPts = audioPtsOffset
                     while (true) {
                         val sampleSize = extractor.readSampleData(buffer, 0)
                         if (sampleSize < 0) break
 
-                        audioInfo.offset = 0
-                        audioInfo.size = sampleSize
-                        audioInfo.presentationTimeUs = audioPtsOffset + extractor.sampleTime
-                        audioInfo.flags = extractor.sampleFlags
-                        muxer.writeSampleData(audioTrackIndex, buffer, audioInfo)
-                        lastPts = audioInfo.presentationTimeUs
+                        val sampleTime = extractor.sampleTime
+                        if (sampleTime >= trimUs) {
+                            audioInfo.offset = 0
+                            audioInfo.size = sampleSize
+                            audioInfo.presentationTimeUs = audioPtsOffset + (sampleTime - trimUs)
+                            audioInfo.flags = extractor.sampleFlags
+                            muxer.writeSampleData(audioTrackIndex, buffer, audioInfo)
+                            lastPts = audioInfo.presentationTimeUs
+                        }
                         extractor.advance()
                     }
                     extractor.unselectTrack(srcAudioTrack)
@@ -726,14 +1062,8 @@ class MainActivity : AppCompatActivity() {
             appendDiagnosticLog("Erro ao juntar segmentos: ${error.message}", error)
             return false
         } finally {
-            try {
-                if (started) muxer.stop()
-            } catch (_: Exception) {
-            }
-            try {
-                muxer.release()
-            } catch (_: Exception) {
-            }
+            runCatching { if (started) muxer.stop() }
+            runCatching { muxer.release() }
         }
 
         return outputFile.exists() && outputFile.length() > 0
@@ -818,6 +1148,7 @@ class MainActivity : AppCompatActivity() {
         synchronized(segmentLock) {
             segmentFiles.forEach { it.delete() }
             segmentFiles.clear()
+            sessionSegmentFiles.clear()
         }
 
         val dir = getSegmentsDirectory()
@@ -839,6 +1170,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun timestamp(): String {
         return SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+    }
+
+    private fun updateRecordingTimer() {
+        val elapsedMs = if (isContinuousRecording) {
+            (SystemClock.elapsedRealtime() - recordingStartedAtMs).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val totalSeconds = elapsedMs / 1000L
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        binding.recordingTimerText.text = String.format(Locale.US, "%02d:%02d", minutes, seconds)
     }
 
     private fun status(text: String) {
@@ -875,9 +1218,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onStop() {
+        if (isContinuousRecording) {
+            pauseContinuousRecordingForBackground()
+        }
+        super.onStop()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (shouldResumeAfterBackground && pausedByBackground && allPermissionsGranted()) {
+            mainHandler.postDelayed({
+                if (shouldResumeAfterBackground && pausedByBackground && !isContinuousRecording) {
+                    runUiAction("AUTO_RESUME_RECORDING") { startContinuousRecording(resetBuffer = false) }
+                    status("Status: gravação retomada automaticamente")
+                }
+            }, 500L)
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(batteryReceiver)
+        mainHandler.removeCallbacks(recordingTimerRunnable)
         clearSegmentCache()
         rtmpStreamEngine?.close()
         ErrorFileLogger.logInfo(this, "APP_DESTROY", "MainActivity destruída")
