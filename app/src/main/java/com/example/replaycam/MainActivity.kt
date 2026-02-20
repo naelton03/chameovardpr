@@ -18,6 +18,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
@@ -86,6 +87,14 @@ class MainActivity : AppCompatActivity() {
     private var isContinuousRecording = false
     private var isStopping = false
     private var pendingSegmentFinalize: CompletableDeferred<Unit>? = null
+    private var recordingStartedAtMs: Long = 0L
+    private val recordingTimerRunnable = object : Runnable {
+        override fun run() {
+            if (!isContinuousRecording) return
+            updateRecordingTimer()
+            mainHandler.postDelayed(this, 1_000L)
+        }
+    }
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -214,6 +223,7 @@ class MainActivity : AppCompatActivity() {
         configureLiveUi()
         updateVideoPathLabel()
         clearSegmentCache()
+        updateRecordingTimer()
 
         if (allPermissionsGranted()) {
             startCamera()
@@ -542,12 +552,17 @@ class MainActivity : AppCompatActivity() {
         }
 
         clearSegmentCache()
+        updateRecordingTimer()
         binding.replayButton.isEnabled = false
         isContinuousRecording = true
         isStopping = false
         binding.startButton.isEnabled = false
         binding.stopButton.isEnabled = true
         binding.replayButton.isEnabled = true
+        recordingStartedAtMs = SystemClock.elapsedRealtime()
+        mainHandler.removeCallbacks(recordingTimerRunnable)
+        mainHandler.post(recordingTimerRunnable)
+        updateRecordingTimer()
         status("Status: gravando continuamente")
 
         startSegment(capture)
@@ -625,6 +640,9 @@ class MainActivity : AppCompatActivity() {
         binding.startButton.isEnabled = true
         binding.stopButton.isEnabled = false
         binding.replayButton.isEnabled = false
+        mainHandler.removeCallbacks(recordingTimerRunnable)
+        recordingStartedAtMs = 0L
+        updateRecordingTimer()
         status("Status: gravação parada")
         clearSegmentCache()
     }
@@ -940,6 +958,18 @@ class MainActivity : AppCompatActivity() {
         return SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
     }
 
+    private fun updateRecordingTimer() {
+        val elapsedMs = if (isContinuousRecording) {
+            (SystemClock.elapsedRealtime() - recordingStartedAtMs).coerceAtLeast(0L)
+        } else {
+            0L
+        }
+        val totalSeconds = elapsedMs / 1000L
+        val minutes = totalSeconds / 60L
+        val seconds = totalSeconds % 60L
+        binding.recordingTimerText.text = String.format(Locale.US, "%02d:%02d", minutes, seconds)
+    }
+
     private fun status(text: String) {
         binding.statusText.text = text
     }
@@ -977,6 +1007,7 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(batteryReceiver)
+        mainHandler.removeCallbacks(recordingTimerRunnable)
         clearSegmentCache()
         rtmpStreamEngine?.close()
         ErrorFileLogger.logInfo(this, "APP_DESTROY", "MainActivity destruída")
