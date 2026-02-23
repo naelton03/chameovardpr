@@ -139,6 +139,16 @@ Requisitos desse fluxo: `gh` autenticado, `jq`, `adb` e device Android conectado
 
 Se `ref` não for informado, o script usa a branch atual local (quando disponível) e, em último caso, a branch padrão do repositório.
 
+
+## Versão cross-platform (Android + iOS)
+
+Para atender ao rebuild cross-platform, foi adicionada uma base React Native/Expo em `cross-platform/replaycam-mobile`.
+
+- Guia técnico: `docs/cross-platform-rebuild.md`
+- App novo: `cross-platform/replaycam-mobile`
+
+Essa base replica o fluxo principal do ReplayCam (preview em tela, segmentos de 5s, controle de zoom, replay/exportação, permissões, retomada foreground/background, galeria com fallback de cópia de caminho, diagnóstico com handlers globais, menu de configuração de upload automático para Google Drive (OAuth real com o mesmo Web Client ID do Android), duração de replay configurável entre 10s e 40s e bloco live por feature flag). A UI visível foi simplificada para fidelidade ao uso atual: card de tempo/status + botões Gravar/Parar dinâmico e Salvar replay, com menu para configurações extras.
+
 ## Documentação funcional
 
 - Veja o detalhamento atualizado em `docs/funcionalidades-atuais.md`.

@@ -91,6 +91,7 @@ class MainActivity : AppCompatActivity() {
     private val tag = "MainActivity"
     private val prefsName = "replaycam_prefs"
     private val prefAutoUpload = "auto_upload_enabled"
+    private val prefReplayDurationSec = "replay_duration_sec"
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
@@ -103,6 +104,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var driveUploadManager: DriveUploadManager
     private lateinit var appPrefs: android.content.SharedPreferences
     private var autoUploadEnabled = false
+    private val replayDurationOptionsSec = intArrayOf(10, 15, 20, 25, 30, 35, 40)
+    private var replayDurationSec = 20
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
     private var transitionRequestedAfterMediaFlow = false
@@ -285,6 +288,9 @@ class MainActivity : AppCompatActivity() {
         cameraExecutor = Executors.newSingleThreadExecutor()
         appPrefs = getSharedPreferences(prefsName, Context.MODE_PRIVATE)
         autoUploadEnabled = appPrefs.getBoolean(prefAutoUpload, false)
+        replayDurationSec = appPrefs.getInt(prefReplayDurationSec, 20).let { configured ->
+            if (replayDurationOptionsSec.contains(configured)) configured else 20
+        }
         driveUploadManager = DriveUploadManager(this)
         if (FeatureToggles.isLiveEnabled) {
             youtubeLiveHandler = YouTubeLiveHandler(this)
@@ -298,6 +304,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
+        updateReplayButtonLabel()
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         binding.menuButton.setOnClickListener { showMainMenu(it) }
         binding.zoomOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -334,6 +341,10 @@ class MainActivity : AppCompatActivity() {
             when (item.itemId) {
                 R.id.menu_config_auto_upload -> {
                     showAutoUploadConfigDialog()
+                    true
+                }
+                R.id.menu_config_replay_duration -> {
+                    showReplayDurationDialog()
                     true
                 }
                 else -> false
@@ -377,6 +388,24 @@ class MainActivity : AppCompatActivity() {
             .setTitle("Configurar upload automático")
             .setView(dialogView)
             .setPositiveButton("Fechar", null)
+            .show()
+    }
+
+
+    private fun showReplayDurationDialog() {
+        val labels = replayDurationOptionsSec.map { seconds -> getString(R.string.replay_duration_option, seconds) }.toTypedArray()
+        val selectedIndex = replayDurationOptionsSec.indexOf(replayDurationSec).coerceAtLeast(0)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.replay_duration_dialog_title)
+            .setSingleChoiceItems(labels, selectedIndex) { dialog, which ->
+                replayDurationSec = replayDurationOptionsSec[which]
+                appPrefs.edit().putInt(prefReplayDurationSec, replayDurationSec).apply()
+                updateReplayButtonLabel()
+                toast(getString(R.string.replay_duration_updated, replayDurationSec))
+                dialog.dismiss()
+            }
+            .setNegativeButton(R.string.close, null)
             .show()
     }
 
@@ -1057,7 +1086,7 @@ class MainActivity : AppCompatActivity() {
                     mergeLastWindowIntoSingleVideo(
                         segments = snapshot,
                         outputFile = mergedReplay,
-                        targetWindowUs = 20_000_000L
+                        targetWindowUs = replayDurationSec * 1_000_000L
                     )
                 }
 
@@ -1297,6 +1326,10 @@ class MainActivity : AppCompatActivity() {
             binding.startButton.text = getString(R.string.start_live)
             binding.startButton.setBackgroundColor(ContextCompat.getColor(this, android.R.color.holo_green_dark))
         }
+    }
+
+    private fun updateReplayButtonLabel() {
+        binding.replayButton.text = getString(R.string.save_replay_with_duration, replayDurationSec)
     }
 
     private fun updateVideoPathLabel() {
