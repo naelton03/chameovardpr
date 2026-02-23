@@ -106,6 +106,7 @@ class MainActivity : AppCompatActivity() {
     private var autoUploadEnabled = false
     private val replayDurationOptionsSec = intArrayOf(10, 15, 20, 25, 30, 35, 40)
     private var replayDurationSec = 20
+    private val maxReplayDurationSec = replayDurationOptionsSec.maxOrNull() ?: replayDurationSec
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
     private var transitionRequestedAfterMediaFlow = false
@@ -113,7 +114,8 @@ class MainActivity : AppCompatActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 20_000L
-    private val maxSegments = 2
+    private val segmentDurationSec = (segmentDurationMs / 1000L).toInt().coerceAtLeast(1)
+    private val maxSegments = ((maxReplayDurationSec + segmentDurationSec - 1) / segmentDurationSec) + 1
     private val segmentFiles = ArrayDeque<File>()
     private val sessionSegmentFiles = ArrayDeque<File>()
     private val segmentLock = Any()
