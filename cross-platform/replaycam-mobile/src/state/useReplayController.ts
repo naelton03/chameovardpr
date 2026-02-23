@@ -6,7 +6,7 @@ import { requestAllPermissions } from '../services/permissions';
 import { appendDiagnosticLog, diagnosticsFilePath } from '../services/logger';
 import { copyPathToClipboard, openVideoGalleryQuickAccess } from '../services/gallery';
 import { FeatureToggles } from '../config/featureToggles';
-import { getAutoUploadEnabled, setAutoUploadEnabled } from '../services/autoUploadPrefs';
+import { getAutoUploadEnabled, getReplayDurationSec, setAutoUploadEnabled, setReplayDurationSec } from '../services/autoUploadPrefs';
 import { isDriveLinked, linkDriveAccount, linkedDriveEmail, unlinkDriveAccount, uploadVideoToDrive } from '../services/driveUpload';
 
 interface CameraRecorder {
@@ -41,6 +41,7 @@ export function useReplayController() {
   const [isSavingReplay, setIsSavingReplay] = useState(false);
   const [zoomRatios, setZoomRatios] = useState<number[]>([1]);
   const [selectedZoomRatio, setSelectedZoomRatio] = useState<number>(1);
+  const [replayDurationSec, setReplayDurationSecState] = useState<number>(20);
 
   useEffect(() => {
     engine.listRearCameras().then((cameras) => {
@@ -51,9 +52,10 @@ export function useReplayController() {
 
   useEffect(() => {
     (async () => {
-      const [enabled, email] = await Promise.all([getAutoUploadEnabled(), linkedDriveEmail()]);
+      const [enabled, email, replaySeconds] = await Promise.all([getAutoUploadEnabled(), linkedDriveEmail(), getReplayDurationSec()]);
       setAutoUploadEnabledState(enabled);
       setDriveEmail(email);
+      setReplayDurationSecState(replaySeconds);
     })();
   }, []);
 
@@ -148,9 +150,9 @@ export function useReplayController() {
     savingReplayLockRef.current = true;
     setIsSavingReplay(true);
     try {
-      const saved = await engine.saveReplayWindow();
+      const saved = await engine.saveReplayWindow(replayDurationSec);
       setLastOutputPath(saved.localUri);
-      setStatus({ message: `Replay salvo: ${saved.fileName} (${saved.album})` });
+      setStatus({ message: `Replay salvo (${replayDurationSec}s): ${saved.fileName} (${saved.album})` });
       await maybeUploadVideoToDrive(saved.localUri, saved.fileName);
     } catch (error) {
       setStatus({ message: `Erro ao salvar replay: ${(error as Error).message}`, isError: true });
@@ -211,6 +213,14 @@ export function useReplayController() {
     await setAutoUploadEnabled(enabled);
   };
 
+
+
+  const updateReplayDurationSec = async (value: number) => {
+    setReplayDurationSecState(value);
+    await setReplayDurationSec(value);
+    setStatus({ message: `Configuração aplicada: replay ${value}s` });
+  };
+
   const toggleDriveLink = async () => {
     if (driveEmail) {
       await unlinkDriveAccount();
@@ -243,6 +253,8 @@ export function useReplayController() {
     driveEmail,
     isSavingReplay,
     toggleAutoUpload,
+    replayDurationSec,
+    updateReplayDurationSec,
     toggleDriveLink,
     zoomRatios,
     selectedZoomRatio,

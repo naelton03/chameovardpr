@@ -7,13 +7,15 @@ type Prefs = {
   driveLinkedEmail: string | null;
   driveAccessToken: string | null;
   driveAccessTokenExpiryMs: number | null;
+  replayDurationSec: number;
 };
 
 const defaultPrefs: Prefs = {
   autoUploadEnabled: false,
   driveLinkedEmail: null,
   driveAccessToken: null,
-  driveAccessTokenExpiryMs: null
+  driveAccessTokenExpiryMs: null,
+  replayDurationSec: 20
 };
 
 async function readPrefs(): Promise<Prefs> {
@@ -76,4 +78,14 @@ export async function clearDriveSession(): Promise<void> {
     driveAccessToken: null,
     driveAccessTokenExpiryMs: null
   });
+}
+
+
+export async function getReplayDurationSec(): Promise<number> {
+  return (await readPrefs()).replayDurationSec;
+}
+
+export async function setReplayDurationSec(value: number): Promise<void> {
+  const prefs = await readPrefs();
+  await writePrefs({ ...prefs, replayDurationSec: value });
 }

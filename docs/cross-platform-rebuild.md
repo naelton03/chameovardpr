@@ -22,6 +22,8 @@ A base cross-platform do ReplayCam está em `cross-platform/replaycam-mobile` e 
 
 ### UI visível alinhada ao Android atual
 
+- Duração do replay configurável no menu (10s, 15s, 20s, 25s, 30s, 35s, 40s).
+
 A UI visível está alinhada ao fluxo atual descrito pelo produto:
 - card superior com tempo de gravação e status (incluindo zoom atual),
 - botão dinâmico **Gravar/Parar**,
@@ -34,7 +36,7 @@ Demais recursos permanecem no código, mas não expostos visualmente por padrão
 
 - Se o usuário salvar com menos de 20s de gravação (ex.: 5s, 10s, 15s), o app salva exatamente o que já foi gravado até o momento.
 - Se salvar com 20s, salva os 20s completos.
-- Se salvar após 20s (ex.: 40s), salva os últimos 20s da janela de replay.
+- Se salvar após o limite configurado, salva a janela final com o tamanho configurado (ex.: duração configurada 20s e gravação em 40s => salva de 20s a 40s).
 - Replays consecutivos durante gravação são serializados para evitar disputa de segmento e perda de estado.
 - O botão de replay usa lock síncrono (`useRef`) + estado de UI para bloquear duplo clique no mesmo frame durante o salvamento offline.
 - Ao parar a gravação, exporta a sessão inteira gravada até o momento.

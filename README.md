@@ -147,7 +147,7 @@ Para atender ao rebuild cross-platform, foi adicionada uma base React Native/Exp
 - Guia técnico: `docs/cross-platform-rebuild.md`
 - App novo: `cross-platform/replaycam-mobile`
 
-Essa base replica o fluxo principal do ReplayCam (preview em tela, segmentos de 5s, buffer 20s, controle de zoom, replay/exportação, permissões, retomada foreground/background, galeria com fallback de cópia de caminho, diagnóstico com handlers globais, menu de configuração de upload automático para Google Drive (OAuth real com o mesmo Web Client ID do Android) e bloco live por feature flag). A UI visível foi simplificada para fidelidade ao uso atual: card de tempo/status + botões Gravar/Parar dinâmico e Salvar replay (20s), com menu para configurações extras.
+Essa base replica o fluxo principal do ReplayCam (preview em tela, segmentos de 5s, controle de zoom, replay/exportação, permissões, retomada foreground/background, galeria com fallback de cópia de caminho, diagnóstico com handlers globais, menu de configuração de upload automático para Google Drive (OAuth real com o mesmo Web Client ID do Android), duração de replay configurável entre 10s e 40s e bloco live por feature flag). A UI visível foi simplificada para fidelidade ao uso atual: card de tempo/status + botões Gravar/Parar dinâmico e Salvar replay, com menu para configurações extras.
 
 ## Documentação funcional
 

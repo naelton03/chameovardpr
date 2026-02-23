@@ -96,7 +96,7 @@ export class ReplayEngine {
     });
   }
 
-  async saveReplayWindow(): Promise<SavedVideoInfo> {
+  async saveReplayWindow(targetSeconds = 20): Promise<SavedVideoInfo> {
     await this.forceSegmentBoundaryIfRecording();
 
     const buffered = this.buffer.replaySegments();
@@ -104,9 +104,9 @@ export class ReplayEngine {
       throw new Error('Sem segmentos de replay para salvar.');
     }
 
-    const { selected, trimFromFirstSec } = selectReplayWindowSegments(buffered, 20);
+    const { selected, trimFromFirstSec } = selectReplayWindowSegments(buffered, targetSeconds);
     const selectedDuration = selected.reduce((acc, item) => acc + item.durationSec, 0);
-    const expectedDuration = Math.min(20, selectedDuration);
+    const expectedDuration = Math.min(targetSeconds, selectedDuration);
 
     const fileName = `replay_${timestampTag()}.mp4`;
     const localUri = `${FileSystem.cacheDirectory}${fileName}`;

@@ -22,6 +22,8 @@ export function ReplayScreen() {
     autoUploadEnabled,
     driveEmail,
     toggleAutoUpload,
+    replayDurationSec,
+    updateReplayDurationSec,
     toggleDriveLink,
     isSavingReplay
   } = useReplayController();
@@ -48,7 +50,7 @@ export function ReplayScreen() {
             onPress={isRecording ? stopAndSaveSession : startRecording}
             tone={isRecording ? 'danger' : 'success'}
           />
-          <PrimaryButton label={isSavingReplay ? 'Salvando replay...' : 'Salvar replay (20s)'} onPress={saveReplay} disabled={!isRecording || isSavingReplay} tone="primary" />
+          <PrimaryButton label={isSavingReplay ? 'Salvando replay...' : `Salvar replay (${replayDurationSec}s)`} onPress={saveReplay} disabled={!isRecording || isSavingReplay} tone="primary" />
         </View>
       </View>
 
@@ -69,6 +71,20 @@ export function ReplayScreen() {
             <View style={styles.switchRow}>
               <Text style={styles.modalText}>Realizar uploads automáticos?</Text>
               <Switch value={autoUploadEnabled} onValueChange={toggleAutoUpload} />
+            </View>
+
+
+            <Text style={styles.modalText}>Duração do replay</Text>
+            <View style={styles.durationWrap}>
+              {[10, 15, 20, 25, 30, 35, 40].map((seconds) => (
+                <PrimaryButton
+                  key={`replay-${seconds}`}
+                  label={`${seconds}s`}
+                  onPress={() => updateReplayDurationSec(seconds)}
+                  tone={replayDurationSec === seconds ? 'success' : 'primary'}
+                  fill={false}
+                />
+              ))}
             </View>
 
             <PrimaryButton label="Fechar" onPress={() => setMenuOpen(false)} tone="danger" />
@@ -174,5 +190,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center'
+  },
+  durationWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8
   }
 });
