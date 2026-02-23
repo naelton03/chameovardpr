@@ -21,4 +21,12 @@
     <string name="privacy_public">public</string>
     <string name="privacy_unlisted">unlisted</string>
     <string name="privacy_private">private</string>
+    <string name="menu">Menu</string>
+    <string name="menu_config_auto_upload">Configurar upload automático</string>
+    <string name="auto_upload_dialog_title">Configurar upload automático</string>
+    <string name="drive_no_account">Nenhuma conta vinculada</string>
+    <string name="drive_account_linked">Conta vinculada: %1$s</string>
+    <string name="drive_link_account">Vincular conta Google</string>
+    <string name="drive_unlink_account">Desvincular conta</string>
+    <string name="auto_upload_flag">Realizar uploads automáticos?</string>
 </resources>

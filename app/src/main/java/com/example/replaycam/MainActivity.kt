@@ -26,8 +26,11 @@ import android.provider.Settings
 import android.util.Log
 import android.util.Range
 import android.widget.ArrayAdapter
+import android.view.LayoutInflater
 import android.view.View
+import android.widget.PopupMenu
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -86,6 +89,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val tag = "MainActivity"
+    private val prefsName = "replaycam_prefs"
+    private val prefAutoUpload = "auto_upload_enabled"
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
@@ -95,6 +100,9 @@ class MainActivity : AppCompatActivity() {
     private var youtubeLiveHandler: YouTubeLiveHandler? = null
     private var rtmpStreamEngine: RtmpStreamEngine? = null
     private var signedAccount: GoogleSignInAccount? = null
+    private lateinit var driveUploadManager: DriveUploadManager
+    private lateinit var appPrefs: android.content.SharedPreferences
+    private var autoUploadEnabled = false
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
     private var transitionRequestedAfterMediaFlow = false
@@ -210,6 +218,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private val driveSignInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val account = driveUploadManager.parseSignInResult(result.data)
+        if (account != null) {
+            toast("Conta Google vinculada para uploads no Drive")
+            status("Status: conta Drive vinculada (${account.email ?: "sem e-mail"})")
+            return@registerForActivityResult
+        }
+
+        if (result.resultCode == RESULT_CANCELED) {
+            toast("Vinculação com Google Drive cancelada")
+            return@registerForActivityResult
+        }
+
+        toast("Falha ao vincular conta Google Drive")
+    }
+
     private fun ensureRootLogPermission() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         if (ErrorFileLogger.canWriteRoot(this)) {
@@ -239,6 +264,9 @@ class MainActivity : AppCompatActivity() {
         ensureRootLogPermission()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        appPrefs = getSharedPreferences(prefsName, Context.MODE_PRIVATE)
+        autoUploadEnabled = appPrefs.getBoolean(prefAutoUpload, false)
+        driveUploadManager = DriveUploadManager(this)
         if (FeatureToggles.isLiveEnabled) {
             youtubeLiveHandler = YouTubeLiveHandler(this)
             rtmpStreamEngine = RtmpStreamEngine(binding.streamSurface, streamCallbacks)
@@ -250,6 +278,7 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
         binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
+        binding.menuButton.setOnClickListener { showMainMenu(it) }
         binding.zoomOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
             override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
 
@@ -271,6 +300,86 @@ class MainActivity : AppCompatActivity() {
         }
 
         registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    }
+
+
+    private fun showMainMenu(anchor: View) {
+        val popup = PopupMenu(this, anchor)
+        popup.menuInflater.inflate(R.menu.main_menu, popup.menu)
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                R.id.menu_config_auto_upload -> {
+                    showAutoUploadConfigDialog()
+                    true
+                }
+                else -> false
+            }
+        }
+        popup.show()
+    }
+
+    private fun showAutoUploadConfigDialog() {
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_auto_upload_config, null)
+        val accountText = dialogView.findViewById<android.widget.TextView>(R.id.driveAccountText)
+        val linkButton = dialogView.findViewById<android.widget.Button>(R.id.linkGoogleButton)
+        val autoUploadSwitch = dialogView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.autoUploadSwitch)
+
+        val linkedEmail = driveUploadManager.linkedEmail()
+        accountText.text = if (linkedEmail.isNullOrBlank()) {
+            "Nenhuma conta vinculada"
+        } else {
+            "Conta vinculada: $linkedEmail"
+        }
+        linkButton.text = if (linkedEmail.isNullOrBlank()) "Vincular conta Google" else "Desvincular conta"
+
+        autoUploadSwitch.isChecked = autoUploadEnabled
+        autoUploadSwitch.setOnCheckedChangeListener { _, checked ->
+            autoUploadEnabled = checked
+            appPrefs.edit().putBoolean(prefAutoUpload, checked).apply()
+        }
+
+        linkButton.setOnClickListener {
+            if (driveUploadManager.isLinked()) {
+                lifecycleScope.launch {
+                    driveUploadManager.signOut()
+                    toast("Conta Google Drive desvinculada")
+                }
+            } else {
+                driveSignInLauncher.launch(driveUploadManager.authIntent())
+            }
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Configurar upload automático")
+            .setView(dialogView)
+            .setPositiveButton("Fechar", null)
+            .show()
+    }
+
+    private fun maybeUploadVideoToDrive(savedUri: Uri, displayName: String) {
+        if (!autoUploadEnabled) return
+        if (!driveUploadManager.isLinked()) {
+            status("Status: upload automático ativo, mas sem conta Drive vinculada")
+            return
+        }
+
+        val dateFolder = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        lifecycleScope.launch {
+            val result = driveUploadManager.uploadVideo(
+                videoUri = savedUri,
+                displayName = displayName,
+                dateFolderName = dateFolder
+            )
+
+            result.onSuccess {
+                status("Status: vídeo enviado ao Google Drive")
+                toast("Upload para Drive concluído")
+            }.onFailure { error ->
+                status("Erro upload Drive: ${error.message}")
+                appendDiagnosticLog("Falha upload Drive: ${error.message}", error)
+                toast("Falha no upload para Drive")
+            }
+        }
     }
 
     private fun configureLiveUi() {
@@ -938,6 +1047,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         toast("Gravação completa salva em ${getPublicReplayPathLabel()}")
+        maybeUploadVideoToDrive(savedUri, outputName)
     }
 
     private fun saveReplayBundle() {
@@ -982,6 +1092,7 @@ class MainActivity : AppCompatActivity() {
 
                 status("Status: replay salvo na galeria")
                 toast("Replay salvo em ${getPublicReplayPathLabel()}")
+                maybeUploadVideoToDrive(savedUri, outputName)
             } finally {
                 binding.replayButton.isEnabled = isContinuousRecording
             }
