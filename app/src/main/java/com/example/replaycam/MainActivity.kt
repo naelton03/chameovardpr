@@ -72,6 +72,18 @@ import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
+    data class SegmentEntry(
+        val file: File,
+        val startUs: Long,
+        val endUs: Long
+    )
+
+    data class SegmentSlice(
+        val file: File,
+        val trimStartUs: Long,
+        val trimEndUs: Long
+    )
+
     data class RuntimeCameraCapability(
         val cameraId: String,
         val lensLabel: String,
@@ -106,7 +118,6 @@ class MainActivity : AppCompatActivity() {
     private var autoUploadEnabled = false
     private val replayDurationOptionsSec = intArrayOf(10, 15, 20, 25, 30, 35, 40)
     private var replayDurationSec = 20
-    private val maxReplayDurationSec = replayDurationOptionsSec.maxOrNull() ?: replayDurationSec
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
     private var transitionRequestedAfterMediaFlow = false
@@ -114,16 +125,15 @@ class MainActivity : AppCompatActivity() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val segmentDurationMs = 20_000L
-    private val segmentDurationSec = (segmentDurationMs / 1000L).toInt().coerceAtLeast(1)
-    private val maxSegments = ((maxReplayDurationSec + segmentDurationSec - 1) / segmentDurationSec) + 1
-    private val segmentFiles = ArrayDeque<File>()
-    private val sessionSegmentFiles = ArrayDeque<File>()
+    private val sessionSegments = ArrayDeque<SegmentEntry>()
     private val segmentLock = Any()
     private val diagnosticsLogLock = Any()
     private var isContinuousRecording = false
     private var isStopping = false
     private var pendingSegmentFinalize: CompletableDeferred<Unit>? = null
     private var recordingStartedAtMs: Long = 0L
+    private var activeSegmentStartedAtMs: Long = 0L
+    private var finalizedSessionDurationUs: Long = 0L
     private var pausedByBackground = false
     private var shouldResumeAfterBackground = false
     private var cameraProvider: ProcessCameraProvider? = null
@@ -923,6 +933,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun startSegment(capture: VideoCapture<Recorder>) {
         val segmentFile = createSegmentFile()
+        val segmentStartedAtMs = SystemClock.elapsedRealtime()
+        activeSegmentStartedAtMs = segmentStartedAtMs
 
         val outputOptions = FileOutputOptions.Builder(segmentFile).build()
         var pendingRecording: PendingRecording = capture.output.prepareRecording(this, outputOptions)
@@ -943,7 +955,7 @@ class MainActivity : AppCompatActivity() {
                     status("Erro no segmento: ${event.error}")
                     segmentFile.delete()
                 } else {
-                    onSegmentSaved(segmentFile, event.outputResults.outputUri)
+                    onSegmentSaved(segmentFile, event.outputResults.outputUri, segmentStartedAtMs)
                 }
 
                 pendingSegmentFinalize?.complete(Unit)
@@ -962,7 +974,7 @@ class MainActivity : AppCompatActivity() {
         }, segmentDurationMs)
     }
 
-    private fun onSegmentSaved(file: File, uri: Uri) {
+    private fun onSegmentSaved(file: File, uri: Uri, segmentStartedAtMs: Long) {
         val hasValidFile = file.exists() && file.length() > 0
         val hasValidUri = uri != Uri.EMPTY
 
@@ -971,14 +983,30 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        synchronized(segmentLock) {
-            segmentFiles.addLast(file)
-            sessionSegmentFiles.addLast(file)
-            while (segmentFiles.size > maxSegments) {
-                segmentFiles.removeFirst()
-            }
+        val nowMs = SystemClock.elapsedRealtime()
+        val elapsedMs = (nowMs - segmentStartedAtMs).coerceAtLeast(0L)
+        val fallbackDurationUs = elapsedMs * 1_000L
+        val measuredDurationUs = getDurationUs(file)
+        val segmentDurationUs = maxOf(measuredDurationUs, fallbackDurationUs)
+        if (segmentDurationUs <= 0L) {
+            status("Segmento inválido (sem duração), descartado")
+            file.delete()
+            return
         }
-        val bufferedSeconds = segmentFiles.size * (segmentDurationMs / 1000)
+
+        synchronized(segmentLock) {
+            val segmentStartUs = finalizedSessionDurationUs
+            val segmentEndUs = segmentStartUs + segmentDurationUs
+            sessionSegments.addLast(
+                SegmentEntry(
+                    file = file,
+                    startUs = segmentStartUs,
+                    endUs = segmentEndUs
+                )
+            )
+            finalizedSessionDurationUs = segmentEndUs
+        }
+        val bufferedSeconds = (finalizedSessionDurationUs / 1_000_000L)
         status("Status: buffer ativo (${bufferedSeconds}s)")
     }
 
@@ -1036,8 +1064,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private suspend fun saveFullRecordingFromSession() {
-        val snapshot = synchronized(segmentLock) { sessionSegmentFiles.toList() }
-        if (snapshot.isEmpty()) {
+        val fullSlices = synchronized(segmentLock) {
+            sessionSegments.map {
+                SegmentSlice(
+                    file = it.file,
+                    trimStartUs = 0L,
+                    trimEndUs = (it.endUs - it.startUs).coerceAtLeast(0L)
+                )
+            }
+        }
+        if (fullSlices.isEmpty()) {
             toast("Nenhum vídeo completo para salvar")
             return
         }
@@ -1045,7 +1081,7 @@ class MainActivity : AppCompatActivity() {
         val stamp = timestamp()
         val mergedOutput = File(getSegmentsDirectory(), "full_recording_${stamp}.mp4")
         val merged = withContext(Dispatchers.IO) {
-            muxSegments(snapshot, mergedOutput, trimFromFirstUs = 0L)
+            muxSegmentSlices(fullSlices, mergedOutput)
         }
 
         if (!merged) {
@@ -1073,11 +1109,27 @@ class MainActivity : AppCompatActivity() {
     private fun saveReplayBundle() {
         lifecycleScope.launch {
             binding.replayButton.isEnabled = false
+            val replayPressedAtMs = SystemClock.elapsedRealtime()
 
             try {
                 rotateSegmentForReplayIfNeeded()
-                val snapshot = synchronized(segmentLock) { segmentFiles.toList() }
-                if (snapshot.isEmpty()) {
+                val requestedWindowUs = replayDurationSec * 1_000_000L
+                val replayCutoffUs = synchronized(segmentLock) {
+                    val lastFinalizedUs = sessionSegments.lastOrNull()?.endUs ?: 0L
+                    val activeAtPressUs = if (isContinuousRecording && activeSegmentStartedAtMs > 0L) {
+                        ((replayPressedAtMs - activeSegmentStartedAtMs).coerceAtLeast(0L)) * 1_000L
+                    } else {
+                        0L
+                    }
+                    lastFinalizedUs + activeAtPressUs
+                }
+                val slices = synchronized(segmentLock) {
+                    buildReplaySlicesAtMomentLocked(
+                        targetWindowUs = requestedWindowUs,
+                        timelineEndUs = replayCutoffUs
+                    )
+                }
+                if (slices.isEmpty()) {
                     toast("Ainda não há vídeo para salvar")
                     return@launch
                 }
@@ -1085,11 +1137,7 @@ class MainActivity : AppCompatActivity() {
                 val stamp = timestamp()
                 val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
                 val merged = withContext(Dispatchers.IO) {
-                    mergeLastWindowIntoSingleVideo(
-                        segments = snapshot,
-                        outputFile = mergedReplay,
-                        targetWindowUs = replayDurationSec * 1_000_000L
-                    )
+                    muxSegmentSlices(slices, mergedReplay)
                 }
 
                 if (!merged) {
@@ -1133,30 +1181,37 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun mergeLastWindowIntoSingleVideo(
-        segments: List<File>,
-        outputFile: File,
-        targetWindowUs: Long
-    ): Boolean {
-        if (segments.isEmpty()) return false
+    private fun buildReplaySlicesAtMomentLocked(
+        targetWindowUs: Long,
+        timelineEndUs: Long
+    ): List<SegmentSlice> {
+        val validWindowUs = targetWindowUs.coerceAtLeast(1L)
+        if (sessionSegments.isEmpty()) return emptyList()
 
-        val validSegments = segments.filter { it.exists() && it.length() > 0L }
-        if (validSegments.isEmpty()) return false
+        val lastFinalizedUs = sessionSegments.lastOrNull()?.endUs ?: 0L
+        val safeTimelineEndUs = timelineEndUs.coerceAtLeast(0L).coerceAtMost(lastFinalizedUs)
+        val timelineStartUs = (safeTimelineEndUs - validWindowUs).coerceAtLeast(0L)
 
-        val durationUsByFile = validSegments.associateWith { file -> getDurationUs(file) }
-        var accumulatedUs = 0L
-        val selected = ArrayDeque<File>()
+        return sessionSegments.mapNotNull { segment ->
+            if (!segment.file.exists() || segment.file.length() <= 0L) return@mapNotNull null
+            val overlapStartUs = maxOf(timelineStartUs, segment.startUs)
+            val overlapEndUs = minOf(safeTimelineEndUs, segment.endUs)
+            if (overlapEndUs <= overlapStartUs) return@mapNotNull null
 
-        for (segment in validSegments.asReversed()) {
-            selected.addFirst(segment)
-            accumulatedUs += durationUsByFile[segment] ?: 0L
-            if (accumulatedUs >= targetWindowUs) break
+            SegmentSlice(
+                file = segment.file,
+                trimStartUs = (overlapStartUs - segment.startUs).coerceAtLeast(0L),
+                trimEndUs = (overlapEndUs - segment.startUs).coerceAtLeast(0L)
+            )
         }
+    }
 
-        if (selected.isEmpty()) return false
-
-        val trimFromFirstUs = (accumulatedUs - targetWindowUs).coerceAtLeast(0L)
-        return muxSegments(selected.toList(), outputFile, trimFromFirstUs)
+    private fun muxSegmentSlices(slices: List<SegmentSlice>, outputFile: File): Boolean {
+        if (slices.isEmpty()) return false
+        return muxSegments(
+            segmentSlices = slices,
+            outputFile = outputFile
+        )
     }
 
     private fun getDurationUs(file: File): Long {
@@ -1177,7 +1232,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun muxSegments(segments: List<File>, outputFile: File, trimFromFirstUs: Long): Boolean {
+    private fun muxSegments(segmentSlices: List<SegmentSlice>, outputFile: File): Boolean {
         val muxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
         muxer.setOrientationHint(90)
 
@@ -1192,7 +1247,9 @@ class MainActivity : AppCompatActivity() {
         var audioPtsOffset = 0L
 
         try {
-            segments.forEachIndexed { segmentIndex, segment ->
+            segmentSlices.forEach { slice ->
+                val segment = slice.file
+                if (!segment.exists() || segment.length() <= 0L) return@forEach
                 val extractor = MediaExtractor()
                 extractor.setDataSource(segment.absolutePath)
 
@@ -1217,10 +1274,11 @@ class MainActivity : AppCompatActivity() {
 
                 if (!started) {
                     extractor.release()
-                    return@forEachIndexed
+                    return@forEach
                 }
 
-                val trimUs = if (segmentIndex == 0) trimFromFirstUs else 0L
+                val trimStartUs = slice.trimStartUs.coerceAtLeast(0L)
+                val trimEndUs = slice.trimEndUs.coerceAtLeast(trimStartUs)
 
                 if (srcVideoTrack != -1 && videoTrackIndex != -1) {
                     extractor.selectTrack(srcVideoTrack)
@@ -1230,10 +1288,10 @@ class MainActivity : AppCompatActivity() {
                         if (sampleSize < 0) break
 
                         val sampleTime = extractor.sampleTime
-                        if (sampleTime >= trimUs) {
+                        if (sampleTime >= trimStartUs && sampleTime < trimEndUs) {
                             videoInfo.offset = 0
                             videoInfo.size = sampleSize
-                            videoInfo.presentationTimeUs = videoPtsOffset + (sampleTime - trimUs)
+                            videoInfo.presentationTimeUs = videoPtsOffset + (sampleTime - trimStartUs)
                             videoInfo.flags = extractor.sampleFlags
                             muxer.writeSampleData(videoTrackIndex, buffer, videoInfo)
                             lastPts = videoInfo.presentationTimeUs
@@ -1252,10 +1310,10 @@ class MainActivity : AppCompatActivity() {
                         if (sampleSize < 0) break
 
                         val sampleTime = extractor.sampleTime
-                        if (sampleTime >= trimUs) {
+                        if (sampleTime >= trimStartUs && sampleTime < trimEndUs) {
                             audioInfo.offset = 0
                             audioInfo.size = sampleSize
-                            audioInfo.presentationTimeUs = audioPtsOffset + (sampleTime - trimUs)
+                            audioInfo.presentationTimeUs = audioPtsOffset + (sampleTime - trimStartUs)
                             audioInfo.flags = extractor.sampleFlags
                             muxer.writeSampleData(audioTrackIndex, buffer, audioInfo)
                             lastPts = audioInfo.presentationTimeUs
@@ -1370,10 +1428,10 @@ class MainActivity : AppCompatActivity() {
     private fun clearSegmentCache() {
         activeRecording?.close()
         activeRecording = null
+        activeSegmentStartedAtMs = 0L
+        finalizedSessionDurationUs = 0L
         synchronized(segmentLock) {
-            segmentFiles.forEach { it.delete() }
-            segmentFiles.clear()
-            sessionSegmentFiles.clear()
+            sessionSegments.clear()
         }
 
         val dir = getSegmentsDirectory()
