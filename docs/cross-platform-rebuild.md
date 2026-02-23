@@ -29,11 +29,19 @@ A UI visível está alinhada ao fluxo atual descrito pelo produto:
 
 Demais recursos permanecem no código, mas não expostos visualmente por padrão. O menu superior mantém as configurações de upload automático do Drive (igual ao Android antigo).
 
+
+### Regra de replay validada
+
+- Se o usuário salvar com menos de 20s de gravação (ex.: 5s, 10s, 15s), o app salva exatamente o que já foi gravado até o momento.
+- Se salvar com 20s, salva os 20s completos.
+- Se salvar após 20s (ex.: 40s), salva os últimos 20s da janela de replay.
+- Ao parar a gravação, exporta a sessão inteira gravada até o momento.
+
 ## Limitações técnicas atuais
 
 A integração de Drive usa a mesma credencial Web Client ID do Android antigo (`google_web_client_id`).
 
-- Sem compositor nativo de vídeo, replay e exportação usam fallback (cópia de segmento) quando seria necessário concatenação real de múltiplos segmentos.
+- Replay e exportação usam composição real por segmentos via FFmpeg (concat/trim). Em ambientes sem FFmpeg nativo disponível no app, esse fluxo pode falhar até o módulo estar instalado corretamente.
 - Integração completa YouTube Live + RTMP ainda depende de módulo nativo dedicado em RN/Expo.
 
 ## Como rodar

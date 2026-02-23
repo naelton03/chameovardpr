@@ -4,6 +4,7 @@ import type { CameraOption, LiveConfig, SavedVideoInfo, SegmentInfo } from '../t
 import { ReplayBuffer } from './replayBuffer';
 import { appendDiagnosticLog } from './logger';
 import { saveToReplayAlbum } from './gallery';
+import { composeSegmentsToMp4, selectReplayWindowSegments } from './videoComposer';
 
 interface CameraRecorder {
   recordAsync: (options?: { maxDuration?: number; mute?: boolean }) => Promise<{ uri: string }>;
@@ -80,21 +81,29 @@ export class ReplayEngine {
   }
 
   async saveReplayWindow(): Promise<SavedVideoInfo> {
-    const segments = this.buffer.replaySegments();
-    if (segments.length === 0) {
+    const buffered = this.buffer.replaySegments();
+    if (buffered.length === 0) {
       throw new Error('Sem segmentos de replay para salvar.');
     }
 
-    const latest = segments[segments.length - 1];
+    const { selected, trimFromFirstSec } = selectReplayWindowSegments(buffered, 20);
+    const selectedDuration = selected.reduce((acc, item) => acc + item.durationSec, 0);
+    const expectedDuration = Math.min(20, selectedDuration);
+
     const fileName = `replay_${timestampTag()}.mp4`;
     const localUri = `${FileSystem.cacheDirectory}${fileName}`;
-    await FileSystem.copyAsync({ from: latest.uri, to: localUri });
+
+    await composeSegmentsToMp4({
+      segments: selected,
+      outputUri: localUri,
+      trimFromFirstSec
+    });
+
+    await appendDiagnosticLog(
+      `replay composed expectedDuration=${expectedDuration}s selectedSegments=${selected.length} trimFromFirst=${trimFromFirstSec.toFixed(2)}s`
+    );
+
     const album = await saveToReplayAlbum(localUri);
-
-    if (segments.length > 1) {
-      await appendDiagnosticLog('Replay salvo usando fallback (último segmento). Para concat real de 20s, adicionar compositor nativo.');
-    }
-
     return { fileName, localUri, album };
   }
 
@@ -109,10 +118,15 @@ export class ReplayEngine {
       throw new Error('Não há segmentos na sessão para exportar.');
     }
 
-    const last = this.sessionSegments[this.sessionSegments.length - 1];
     const fileName = `recording_${timestampTag()}.mp4`;
     const localUri = `${FileSystem.cacheDirectory}${fileName}`;
-    await FileSystem.copyAsync({ from: last.uri, to: localUri });
+
+    await composeSegmentsToMp4({
+      segments: this.sessionSegments,
+      outputUri: localUri,
+      trimFromFirstSec: 0
+    });
+
     const album = await saveToReplayAlbum(localUri);
     await this.buffer.deleteAllTempFiles();
     await appendDiagnosticLog(`session exported file=${fileName} segments=${this.sessionSegments.length}`);
