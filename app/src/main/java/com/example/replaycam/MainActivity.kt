@@ -1103,27 +1103,14 @@ class MainActivity : AppCompatActivity() {
     private fun saveReplayBundle() {
         lifecycleScope.launch {
             binding.replayButton.isEnabled = false
-            val replayPressedAtMs = SystemClock.elapsedRealtime()
 
             try {
                 rotateSegmentForReplayIfNeeded()
                 val requestedWindowUs = replayDurationSec * 1_000_000L
-                val replayCutoffUs = synchronized(segmentLock) {
-                    val lastFinalizedUs = sessionSegments.lastOrNull()?.endUs ?: 0L
-                    val activeAtPressUs = if (isContinuousRecording && activeSegmentStartedAtMs > 0L) {
-                        ((replayPressedAtMs - activeSegmentStartedAtMs).coerceAtLeast(0L)) * 1_000L
-                    } else {
-                        0L
-                    }
-                    lastFinalizedUs + activeAtPressUs
+                val replaySlice = synchronized(segmentLock) {
+                    buildReplaySliceFromLatestRecordingLocked(requestedWindowUs)
                 }
-                val slices = synchronized(segmentLock) {
-                    buildReplaySlicesAtMomentLocked(
-                        targetWindowUs = requestedWindowUs,
-                        timelineEndUs = replayCutoffUs
-                    )
-                }
-                if (slices.isEmpty()) {
+                if (replaySlice == null) {
                     toast("Ainda não há vídeo para salvar")
                     return@launch
                 }
@@ -1131,7 +1118,7 @@ class MainActivity : AppCompatActivity() {
                 val stamp = timestamp()
                 val mergedReplay = File(getSegmentsDirectory(), "replay_merged_${stamp}.mp4")
                 val merged = withContext(Dispatchers.IO) {
-                    muxSegmentSlices(slices, mergedReplay)
+                    muxSegmentSlices(listOf(replaySlice), mergedReplay)
                 }
 
                 if (!merged) {
@@ -1175,29 +1162,22 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun buildReplaySlicesAtMomentLocked(
-        targetWindowUs: Long,
-        timelineEndUs: Long
-    ): List<SegmentSlice> {
-        val validWindowUs = targetWindowUs.coerceAtLeast(1L)
-        if (sessionSegments.isEmpty()) return emptyList()
+    private fun buildReplaySliceFromLatestRecordingLocked(targetWindowUs: Long): SegmentSlice? {
+        val latestSegment = sessionSegments.lastOrNull() ?: return null
+        if (!latestSegment.file.exists() || latestSegment.file.length() <= 0L) return null
 
-        val lastFinalizedUs = sessionSegments.lastOrNull()?.endUs ?: 0L
-        val safeTimelineEndUs = timelineEndUs.coerceAtLeast(0L).coerceAtMost(lastFinalizedUs)
-        val timelineStartUs = (safeTimelineEndUs - validWindowUs).coerceAtLeast(0L)
+        val segmentDurationUs = (latestSegment.endUs - latestSegment.startUs).coerceAtLeast(0L)
+        if (segmentDurationUs <= 0L) return null
 
-        return sessionSegments.mapNotNull { segment ->
-            if (!segment.file.exists() || segment.file.length() <= 0L) return@mapNotNull null
-            val overlapStartUs = maxOf(timelineStartUs, segment.startUs)
-            val overlapEndUs = minOf(safeTimelineEndUs, segment.endUs)
-            if (overlapEndUs <= overlapStartUs) return@mapNotNull null
+        val windowUs = targetWindowUs.coerceAtLeast(1L)
+        val trimStartUs = (segmentDurationUs - windowUs).coerceAtLeast(0L)
+        val trimEndUs = segmentDurationUs
 
-            SegmentSlice(
-                file = segment.file,
-                trimStartUs = (overlapStartUs - segment.startUs).coerceAtLeast(0L),
-                trimEndUs = (overlapEndUs - segment.startUs).coerceAtLeast(0L)
-            )
-        }
+        return SegmentSlice(
+            file = latestSegment.file,
+            trimStartUs = trimStartUs,
+            trimEndUs = trimEndUs
+        )
     }
 
     private fun muxSegmentSlices(slices: List<SegmentSlice>, outputFile: File): Boolean {
