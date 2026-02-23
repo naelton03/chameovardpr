@@ -99,6 +99,7 @@
 
         <TextView
             android:id="@+id/videoPathText"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
@@ -121,6 +122,7 @@
 
         <TextView
             android:id="@+id/cameraOptionsLabel"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="4dp"
@@ -130,6 +132,7 @@
 
         <Spinner
             android:id="@+id/cameraOptionsSpinner"
+            android:visibility="gone"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginBottom="10dp"
@@ -193,6 +196,7 @@
 
             <Button
                 android:id="@+id/openFolderButton"
+                android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="48dp"
                 android:layout_marginEnd="6dp"
@@ -245,6 +249,7 @@
 
             <Button
                 android:id="@+id/stopButton"
+                android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="56dp"
                 android:layout_marginStart="6dp"

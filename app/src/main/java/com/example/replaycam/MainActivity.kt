@@ -292,10 +292,12 @@ class MainActivity : AppCompatActivity() {
         }
         signedAccount = GoogleSignIn.getLastSignedInAccount(this)
 
-        binding.startButton.setOnClickListener { runUiAction("BTN_START_RECORDING") { startContinuousRecording(resetBuffer = true) } }
-        binding.stopButton.setOnClickListener { runUiAction("BTN_STOP_RECORDING") { stopContinuousRecording() } }
+        binding.startButton.setOnClickListener {
+            runUiAction("BTN_TOGGLE_RECORDING") {
+                if (isContinuousRecording) stopContinuousRecording() else startContinuousRecording(resetBuffer = true)
+            }
+        }
         binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
-        binding.openFolderButton.setOnClickListener { runUiAction("BTN_OPEN_FOLDER") { openVideoFolder() } }
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         binding.menuButton.setOnClickListener { showMainMenu(it) }
         binding.zoomOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
@@ -306,8 +308,11 @@ class MainActivity : AppCompatActivity() {
                 applyZoomRatio(zoomRatio)
             }
         }
+        binding.openFolderButton.visibility = View.GONE
+        binding.stopButton.visibility = View.GONE
+        binding.videoPathText.visibility = View.GONE
         configureLiveUi()
-        updateVideoPathLabel()
+        updatePrimaryRecordButton()
         setupCameraCapabilityUi()
         clearSegmentCache()
         updateRecordingTimer()
@@ -693,46 +698,11 @@ class MainActivity : AppCompatActivity() {
         }
         availableCameraCapabilities = capabilities
 
-        if (capabilities.isEmpty()) {
-            binding.cameraOptionsLabel.visibility = View.GONE
-            binding.cameraOptionsSpinner.visibility = View.GONE
-            binding.zoomOptionsLabel.visibility = View.GONE
-            binding.zoomOptionsSpinner.visibility = View.GONE
-            selectedCameraCapability = null
-            return
-        }
-
-        binding.cameraOptionsLabel.visibility = View.VISIBLE
-        binding.cameraOptionsSpinner.visibility = View.VISIBLE
+        // Oculto para UX simplificada: seleção manual de câmera não é mais exibida ao usuário.
+        binding.cameraOptionsLabel.visibility = View.GONE
+        binding.cameraOptionsSpinner.visibility = View.GONE
 
         selectedCameraCapability = capabilities.firstOrNull()
-        val labels = capabilities.map { it.displayLabel() }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        binding.cameraOptionsSpinner.adapter = adapter
-
-        binding.cameraOptionsSpinner.setSelection(0)
-        binding.cameraOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
-            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
-
-            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val newCapability = availableCameraCapabilities.getOrNull(position) ?: return
-                if (newCapability.cameraId == selectedCameraCapability?.cameraId) return
-                if (isContinuousRecording) {
-                    toast("Pare a gravação para trocar de câmera")
-                    binding.cameraOptionsSpinner.setSelection(
-                        availableCameraCapabilities.indexOfFirst { it.cameraId == selectedCameraCapability?.cameraId }
-                            .coerceAtLeast(0)
-                    )
-                    return
-                }
-
-                selectedCameraCapability = newCapability
-                setupZoomUiForCapability(newCapability)
-                cameraProvider?.let { bindSelectedCamera(it) }
-            }
-        }
-
         setupZoomUiForCapability(selectedCameraCapability)
     }
 
@@ -906,9 +876,9 @@ class MainActivity : AppCompatActivity() {
         binding.replayButton.isEnabled = false
         isContinuousRecording = true
         isStopping = false
-        binding.startButton.isEnabled = false
-        binding.stopButton.isEnabled = true
+        binding.startButton.isEnabled = true
         binding.replayButton.isEnabled = true
+        updatePrimaryRecordButton()
         pausedByBackground = false
         shouldResumeAfterBackground = false
         recordingStartedAtMs = SystemClock.elapsedRealtime()
@@ -996,8 +966,8 @@ class MainActivity : AppCompatActivity() {
         updateRecordingTimer()
 
         binding.startButton.isEnabled = true
-        binding.stopButton.isEnabled = false
         binding.replayButton.isEnabled = false
+        updatePrimaryRecordButton()
         status("Status: gravação pausada (app em segundo plano)")
     }
 
@@ -1022,8 +992,8 @@ class MainActivity : AppCompatActivity() {
             }
 
             binding.startButton.isEnabled = true
-            binding.stopButton.isEnabled = false
             binding.replayButton.isEnabled = false
+            updatePrimaryRecordButton()
             mainHandler.removeCallbacks(recordingTimerRunnable)
             recordingStartedAtMs = 0L
             updateRecordingTimer()
@@ -1065,7 +1035,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        toast("Gravação completa salva em ${getPublicReplayPathLabel()}")
+        toast("Gravação completa salva")
         maybeUploadVideoToDrive(savedUri, outputName)
     }
 
@@ -1110,7 +1080,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 status("Status: replay salvo na galeria")
-                toast("Replay salvo em ${getPublicReplayPathLabel()}")
+                toast("Replay salvo")
                 maybeUploadVideoToDrive(savedUri, outputName)
             } finally {
                 binding.replayButton.isEnabled = isContinuousRecording
@@ -1316,6 +1286,16 @@ class MainActivity : AppCompatActivity() {
             ErrorFileLogger.logError(this, "SAVE_VIDEO_PUBLIC_GALLERY", error)
             appendDiagnosticLog("Erro ao salvar vídeo em galeria: ${error.message}", error)
             null
+        }
+    }
+
+    private fun updatePrimaryRecordButton() {
+        if (isContinuousRecording) {
+            binding.startButton.text = getString(R.string.stop_live)
+            binding.startButton.setBackgroundColor(ContextCompat.getColor(this, android.R.color.holo_red_dark))
+        } else {
+            binding.startButton.text = getString(R.string.start_live)
+            binding.startButton.setBackgroundColor(ContextCompat.getColor(this, android.R.color.holo_green_dark))
         }
     }
 
