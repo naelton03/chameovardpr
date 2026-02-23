@@ -36,6 +36,7 @@ Demais recursos permanecem no código, mas não expostos visualmente por padrão
 - Se salvar com 20s, salva os 20s completos.
 - Se salvar após 20s (ex.: 40s), salva os últimos 20s da janela de replay.
 - Replays consecutivos durante gravação são serializados para evitar disputa de segmento e perda de estado.
+- O botão de replay usa lock síncrono (`useRef`) + estado de UI para bloquear duplo clique no mesmo frame durante o salvamento offline.
 - Ao parar a gravação, exporta a sessão inteira gravada até o momento.
 
 ## Limitações técnicas atuais

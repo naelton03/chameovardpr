@@ -27,6 +27,7 @@ export function useReplayController() {
   const engine = useMemo(() => new ReplayEngine(), []);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const recorderRef = useRef<CameraRecorder | null>(null);
+  const savingReplayLockRef = useRef(false);
 
   const [isRecording, setIsRecording] = useState(false);
   const [isLive, setIsLive] = useState(false);
@@ -143,7 +144,8 @@ export function useReplayController() {
   };
 
   const saveReplay = async () => {
-    if (isSavingReplay) return;
+    if (savingReplayLockRef.current || isSavingReplay) return;
+    savingReplayLockRef.current = true;
     setIsSavingReplay(true);
     try {
       const saved = await engine.saveReplayWindow();
@@ -153,6 +155,7 @@ export function useReplayController() {
     } catch (error) {
       setStatus({ message: `Erro ao salvar replay: ${(error as Error).message}`, isError: true });
     } finally {
+      savingReplayLockRef.current = false;
       setIsSavingReplay(false);
     }
   };
