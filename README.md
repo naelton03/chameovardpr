@@ -142,6 +142,7 @@ Se `ref` não for informado, o script usa a branch atual local (quando disponív
 ## Documentação funcional
 
 - Veja o detalhamento atualizado em `docs/funcionalidades-atuais.md`.
+- Branding completo da aplicação: `docs/branding-replayon.md`.
 
 ## UI React Native (referência visual)
 
