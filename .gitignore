@@ -4,3 +4,7 @@ build/
 .local.properties
 
 .keystore/
+
+# React Native cross-platform app
+cross-platform/replaycam-mobile/node_modules/
+cross-platform/replaycam-mobile/.expo/
