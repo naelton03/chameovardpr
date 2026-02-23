@@ -2,7 +2,9 @@ package com.example.replaycam
 
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
@@ -20,6 +22,7 @@ import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
 
 class DriveUploadManager(private val context: Context) {
 
@@ -73,6 +76,48 @@ class DriveUploadManager(private val context: Context) {
             null -> "Sem statusCode retornado pelo Google Sign-In."
             else -> "Falha Google Sign-In Drive. statusCode=$statusCode"
         }
+    }
+
+
+    fun oauthSetupChecklist(): String {
+        return """
+            Checklist OAuth Drive:
+            1) Configure OAuth Android com packageName e SHA-1/SHA-256 do APK instalado.
+            2) Configure também um OAuth Web Client e use esse client ID em google_web_client_id.
+            3) Verifique se a Google Drive API está ativada no projeto.
+            4) Garanta que o escopo drive.file está sendo solicitado.
+            5) Na Tela de Permissão OAuth, adicione seu e-mail em Usuários de Teste (quando em modo teste).
+            6) Confirme que o SHA-1 do Google Cloud é o mesmo do APK em execução (DRIVE_OAUTH_DEBUG_INFO).
+            7) Se trocar ambiente/chave de build debug, atualize o SHA-1 manualmente no Google Cloud.
+            8) Reinstale o app após ajustar credenciais.
+        """.trimIndent()
+    }
+
+    fun oauthDebugInfo(): String {
+        return runCatching {
+            val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+                info.signingInfo?.apkContentsSigners?.toList().orEmpty()
+            } else {
+                @Suppress("DEPRECATION")
+                val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_SIGNATURES)
+                @Suppress("DEPRECATION")
+                info.signatures?.toList().orEmpty()
+            }
+
+            val first = signatures.firstOrNull()?.toByteArray()
+            val sha1 = first?.let { digestHex("SHA-1", it) } ?: "indisponível"
+            val sha256 = first?.let { digestHex("SHA-256", it) } ?: "indisponível"
+            "package=${context.packageName}, sha1=$sha1, sha256=$sha256"
+        }.getOrElse { error ->
+            "package=${context.packageName}, fingerprint_error=${error.message}"
+        }
+    }
+
+    private fun digestHex(algorithm: String, bytes: ByteArray): String {
+        return MessageDigest.getInstance(algorithm)
+            .digest(bytes)
+            .joinToString(":") { "%02X".format(it) }
     }
 
     fun linkedAccount(): GoogleSignInAccount? {

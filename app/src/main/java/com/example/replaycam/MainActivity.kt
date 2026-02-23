@@ -243,9 +243,11 @@ class MainActivity : AppCompatActivity() {
         }
 
         if (statusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
-            val oauthDebugInfo = youtubeLiveHandler?.oauthDebugInfo() ?: "oauthDebugInfo indisponível (live desativada)"
+            val oauthDebugInfo = driveUploadManager.oauthDebugInfo()
             appendDiagnosticLog("DRIVE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
+            appendDiagnosticLog(driveUploadManager.oauthSetupChecklist())
             ErrorFileLogger.logInfo(this, "DRIVE_OAUTH_DEBUG_INFO", oauthDebugInfo)
+            ErrorFileLogger.logInfo(this, "DRIVE_OAUTH_CHECKLIST", driveUploadManager.oauthSetupChecklist())
         }
 
         toast("Falha ao vincular conta Google Drive: $statusHint")
