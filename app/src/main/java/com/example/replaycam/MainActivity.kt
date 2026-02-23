@@ -124,7 +124,6 @@ class MainActivity : AppCompatActivity() {
     private var hasRetriedWithPlainRtmp = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val segmentDurationMs = 20_000L
     private val sessionSegments = ArrayDeque<SegmentEntry>()
     private val segmentLock = Any()
     private val diagnosticsLogLock = Any()
@@ -967,11 +966,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        mainHandler.postDelayed({
-            if (isContinuousRecording && !isStopping) {
-                activeRecording?.stop()
-            }
-        }, segmentDurationMs)
     }
 
     private fun onSegmentSaved(file: File, uri: Uri, segmentStartedAtMs: Long) {
@@ -1007,7 +1001,7 @@ class MainActivity : AppCompatActivity() {
             finalizedSessionDurationUs = segmentEndUs
         }
         val bufferedSeconds = (finalizedSessionDurationUs / 1_000_000L)
-        status("Status: buffer ativo (${bufferedSeconds}s)")
+        status("Status: gravação contínua (${bufferedSeconds}s)")
     }
 
     private fun pauseContinuousRecordingForBackground() {
