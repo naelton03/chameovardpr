@@ -37,6 +37,7 @@ export function useReplayController() {
   const [lastOutputPath, setLastOutputPath] = useState<string>('');
   const [autoUploadEnabled, setAutoUploadEnabledState] = useState(false);
   const [driveEmail, setDriveEmail] = useState<string | null>(null);
+  const [isSavingReplay, setIsSavingReplay] = useState(false);
   const [zoomRatios, setZoomRatios] = useState<number[]>([1]);
   const [selectedZoomRatio, setSelectedZoomRatio] = useState<number>(1);
 
@@ -142,6 +143,8 @@ export function useReplayController() {
   };
 
   const saveReplay = async () => {
+    if (isSavingReplay) return;
+    setIsSavingReplay(true);
     try {
       const saved = await engine.saveReplayWindow();
       setLastOutputPath(saved.localUri);
@@ -149,6 +152,8 @@ export function useReplayController() {
       await maybeUploadVideoToDrive(saved.localUri, saved.fileName);
     } catch (error) {
       setStatus({ message: `Erro ao salvar replay: ${(error as Error).message}`, isError: true });
+    } finally {
+      setIsSavingReplay(false);
     }
   };
 
@@ -233,6 +238,7 @@ export function useReplayController() {
     lastOutputPath,
     autoUploadEnabled,
     driveEmail,
+    isSavingReplay,
     toggleAutoUpload,
     toggleDriveLink,
     zoomRatios,

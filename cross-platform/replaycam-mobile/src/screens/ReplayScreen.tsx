@@ -22,7 +22,8 @@ export function ReplayScreen() {
     autoUploadEnabled,
     driveEmail,
     toggleAutoUpload,
-    toggleDriveLink
+    toggleDriveLink,
+    isSavingReplay
   } = useReplayController();
 
   return (
@@ -47,7 +48,7 @@ export function ReplayScreen() {
             onPress={isRecording ? stopAndSaveSession : startRecording}
             tone={isRecording ? 'danger' : 'success'}
           />
-          <PrimaryButton label="Salvar replay (20s)" onPress={saveReplay} disabled={!isRecording} tone="primary" />
+          <PrimaryButton label={isSavingReplay ? 'Salvando replay...' : 'Salvar replay (20s)'} onPress={saveReplay} disabled={!isRecording || isSavingReplay} tone="primary" />
         </View>
       </View>
 

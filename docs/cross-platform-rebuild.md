@@ -35,6 +35,7 @@ Demais recursos permanecem no código, mas não expostos visualmente por padrão
 - Se o usuário salvar com menos de 20s de gravação (ex.: 5s, 10s, 15s), o app salva exatamente o que já foi gravado até o momento.
 - Se salvar com 20s, salva os 20s completos.
 - Se salvar após 20s (ex.: 40s), salva os últimos 20s da janela de replay.
+- Replays consecutivos durante gravação são serializados para evitar disputa de segmento e perda de estado.
 - Ao parar a gravação, exporta a sessão inteira gravada até o momento.
 
 ## Limitações técnicas atuais

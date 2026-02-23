@@ -20,6 +20,7 @@ export class ReplayEngine {
   private buffer = new ReplayBuffer();
   private sessionSegments: SegmentInfo[] = [];
   private activeRecorder: CameraRecorder | null = null;
+  private boundaryPromise: Promise<void> | null = null;
 
   private completedSegmentsCount() {
     return this.sessionSegments.length;
@@ -54,18 +55,25 @@ export class ReplayEngine {
   private async captureLoop(recorder: CameraRecorder) {
     while (this.isRecording) {
       const start = Date.now();
-      const result = await recorder.recordAsync({ maxDuration: SEGMENT_SECONDS, mute: false });
-      const end = Date.now();
-      const segment: SegmentInfo = {
-        uri: result.uri,
-        startedAt: start,
-        endedAt: end,
-        durationSec: Math.max(1, Math.round((end - start) / 1000))
-      };
+      try {
+        const result = await recorder.recordAsync({ maxDuration: SEGMENT_SECONDS, mute: false });
+        const end = Date.now();
+        const segment: SegmentInfo = {
+          uri: result.uri,
+          startedAt: start,
+          endedAt: end,
+          durationSec: Math.max(1, Math.round((end - start) / 1000))
+        };
 
-      this.sessionSegments.push(segment);
-      this.buffer.addSegment(segment);
-      await appendDiagnosticLog(`segment captured uri=${segment.uri} duration=${segment.durationSec}s`);
+        this.sessionSegments.push(segment);
+        this.buffer.addSegment(segment);
+        await appendDiagnosticLog(`segment captured uri=${segment.uri} duration=${segment.durationSec}s`);
+      } catch (error) {
+        if (!this.isRecording) {
+          break;
+        }
+        await appendDiagnosticLog(`segment capture interruption: ${(error as Error).message}`);
+      }
     }
   }
 
@@ -119,17 +127,29 @@ export class ReplayEngine {
 
   async forceSegmentBoundaryIfRecording(): Promise<void> {
     if (!this.isRecording || !this.activeRecorder) return;
-    const before = this.completedSegmentsCount();
-
-    this.activeRecorder.stopRecording();
-
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < 3000) {
-      if (this.completedSegmentsCount() > before) return;
-      await new Promise((resolve) => setTimeout(resolve, 50));
+    if (this.boundaryPromise) {
+      await this.boundaryPromise;
+      return;
     }
 
-    await appendDiagnosticLog('forceSegmentBoundary timeout: replay seguirá com segmentos já finalizados');
+    this.boundaryPromise = (async () => {
+      const before = this.completedSegmentsCount();
+      this.activeRecorder?.stopRecording();
+
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 3000) {
+        if (this.completedSegmentsCount() > before) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+
+      await appendDiagnosticLog('forceSegmentBoundary timeout: replay seguirá com segmentos já finalizados');
+    })();
+
+    try {
+      await this.boundaryPromise;
+    } finally {
+      this.boundaryPromise = null;
+    }
   }
 
   async stopAndExportSession(recorder: CameraRecorder): Promise<SavedVideoInfo> {
