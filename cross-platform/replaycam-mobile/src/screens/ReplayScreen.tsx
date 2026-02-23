@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { useReplayController } from '../state/useReplayController';
 import { PrimaryButton } from '../components/PrimaryButton';
@@ -57,7 +57,13 @@ export function ReplayScreen() {
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Configurar upload automático</Text>
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalContent}
+              showsVerticalScrollIndicator={false}
+            >
+            <Text style={styles.modalTitle}>Configurações</Text>
+            <Text style={styles.modalSectionTitle}>Upload automático</Text>
             <Text style={styles.modalText}>
               {driveEmail ? `Conta vinculada: ${driveEmail}` : 'Nenhuma conta vinculada'}
             </Text>
@@ -74,7 +80,7 @@ export function ReplayScreen() {
             </View>
 
 
-            <Text style={styles.modalText}>Duração do replay</Text>
+            <Text style={styles.modalSectionTitle}>Duração do replay</Text>
             <View style={styles.durationWrap}>
               {[10, 15, 20, 25, 30, 35, 40].map((seconds) => (
                 <PrimaryButton
@@ -88,6 +94,7 @@ export function ReplayScreen() {
             </View>
 
             <PrimaryButton label="Fechar" onPress={() => setMenuOpen(false)} tone="danger" />
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -174,12 +181,25 @@ const styles = StyleSheet.create({
   modalCard: {
     backgroundColor: '#0f1b31',
     borderRadius: 12,
-    padding: 16,
-    gap: 12
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    maxHeight: '85%'
+  },
+  modalScroll: {
+    flexGrow: 0
+  },
+  modalContent: {
+    gap: 12,
+    paddingBottom: 4
   },
   modalTitle: {
     color: colors.textPrimary,
     fontSize: 18,
+    fontWeight: '700'
+  },
+  modalSectionTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
     fontWeight: '700'
   },
   modalText: {
