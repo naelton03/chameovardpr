@@ -1,8 +1,8 @@
 <resources>
     <string name="app_name">ReplayCam</string>
     <string name="start_live">Começar gravação contínua</string>
-    <string name="stop_live">Parar gravação</string>
     <string name="save_replay">Salvar replay (20s)</string>
+    <string name="stop_live">Parar gravação</string>
     <string name="open_video_folder">Abrir galeria</string>
     <string name="video_path">Replays salvos em: %1$s</string>
     <string name="video_folder_open_error">Não foi possível abrir a galeria. Caminho copiado.</string>
@@ -23,6 +23,12 @@
     <string name="privacy_private">private</string>
     <string name="menu">Menu</string>
     <string name="menu_config_auto_upload">Configurar upload automático</string>
+    <string name="menu_config_replay_duration">Configurar duração do replay</string>
+    <string name="replay_duration_dialog_title">Duração do replay</string>
+    <string name="replay_duration_option">%1$ds</string>
+    <string name="replay_duration_updated">Duração do replay: %1$ds</string>
+    <string name="save_replay_with_duration">Salvar replay (%1$ds)</string>
+    <string name="close">Fechar</string>
     <string name="auto_upload_dialog_title">Configurar upload automático</string>
     <string name="drive_no_account">Nenhuma conta vinculada</string>
     <string name="drive_account_linked">Conta vinculada: %1$s</string>
