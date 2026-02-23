@@ -139,6 +139,40 @@ Requisitos desse fluxo: `gh` autenticado, `jq`, `adb` e device Android conectado
 
 Se `ref` não for informado, o script usa a branch atual local (quando disponível) e, em último caso, a branch padrão do repositório.
 
+## Refatoração cross-platform (Flutter)
+
+Foi adicionado um app Flutter em `flutter_app/` para base única Android + iOS, com UI equivalente entre plataformas e port das ações principais:
+
+- **Gravar:** inicia gravação contínua em segmentos de 5s.
+- **Parar:** encerra captura e salva a sessão completa na galeria.
+- **Salvar replay:** concatena e salva os últimos 20s na galeria.
+
+### Bootstrap local do projeto Flutter
+
+```bash
+bash scripts/bootstrap_flutter_app.sh flutter_app
+```
+
+### Rodar localmente
+
+```bash
+cd flutter_app
+flutter pub get
+flutter run
+```
+
+### Builds cross-platform
+
+- APK: `flutter build apk --release`
+- IPA (sem assinatura): `flutter build ipa --release --no-codesign`
+
+### Pipeline cross-platform
+
+Novo workflow `.github/workflows/mobile-cross-platform.yml` gera:
+
+- Artifact Android `replayon-android-apk` (APK)
+- Artifact iOS `replayon-ios-ipa` (IPA sem assinatura)
+
 ## Documentação funcional
 
 - Veja o detalhamento atualizado em `docs/funcionalidades-atuais.md`.
