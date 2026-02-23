@@ -8,6 +8,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.auth.api.signin.GoogleSignInStatusCodes
 import com.google.android.gms.common.api.ApiException
 import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
@@ -24,6 +25,8 @@ class DriveUploadManager(private val context: Context) {
 
     private val tag = "DriveUploadManager"
     var lastSignInStatusCode: Int? = null
+        private set
+    var lastSignInErrorMessage: String? = null
         private set
 
     private val signInClient: GoogleSignInClient by lazy {
@@ -48,11 +51,27 @@ class DriveUploadManager(private val context: Context) {
         return try {
             val account = GoogleSignIn.getSignedInAccountFromIntent(data).getResult(ApiException::class.java)
             lastSignInStatusCode = null
+            lastSignInErrorMessage = null
             account
         } catch (error: ApiException) {
             lastSignInStatusCode = error.statusCode
-            Log.w(tag, "Falha no Google Sign-In Drive status=${error.statusCode}", error)
+            lastSignInErrorMessage = error.localizedMessage ?: error.message
+            Log.w(tag, "Falha no Google Sign-In Drive status=${error.statusCode} message=${lastSignInErrorMessage}", error)
             null
+        }
+    }
+
+
+
+    fun signInErrorHint(statusCode: Int?): String {
+        return when (statusCode) {
+            GoogleSignInStatusCodes.SIGN_IN_CANCELLED -> "Usuário cancelou a vinculação da conta Google."
+            GoogleSignInStatusCodes.SIGN_IN_REQUIRED -> "Conta Google precisa de autenticação novamente."
+            GoogleSignInStatusCodes.SIGN_IN_FAILED -> "Falha no Google Sign-In (12500). Verifique OAuth Web Client + usuários de teste."
+            GoogleSignInStatusCodes.DEVELOPER_ERROR -> "Erro 10 (DEVELOPER_ERROR): confira packageName/SHA-1/SHA-256 no OAuth Android."
+            GoogleSignInStatusCodes.NETWORK_ERROR -> "Erro de rede ao autenticar conta Google."
+            null -> "Sem statusCode retornado pelo Google Sign-In."
+            else -> "Falha Google Sign-In Drive. statusCode=$statusCode"
         }
     }
 

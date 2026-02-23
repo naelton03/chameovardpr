@@ -222,17 +222,34 @@ class MainActivity : AppCompatActivity() {
     private val driveSignInLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val account = driveUploadManager.parseSignInResult(result.data)
         if (account != null) {
+            ErrorFileLogger.logInfo(this, "DRIVE_SIGN_IN", "Conta vinculada com sucesso email=${account.email ?: "sem-email"}")
+            appendDiagnosticLog("Drive vinculado com sucesso: ${account.email ?: "sem-email"}")
             toast("Conta Google vinculada para uploads no Drive")
             status("Status: conta Drive vinculada (${account.email ?: "sem e-mail"})")
             return@registerForActivityResult
         }
 
-        if (result.resultCode == RESULT_CANCELED) {
+        val statusCode = driveUploadManager.lastSignInStatusCode
+        val statusHint = driveUploadManager.signInErrorHint(statusCode)
+        val errorMessage = driveUploadManager.lastSignInErrorMessage ?: "sem mensagem"
+        val reasonLog = "Drive vinculação falhou/cancelada. resultCode=${result.resultCode} statusCode=$statusCode hint=$statusHint message=$errorMessage"
+
+        appendDiagnosticLog(reasonLog)
+        ErrorFileLogger.logInfo(this, "DRIVE_SIGN_IN", reasonLog)
+
+        if (result.resultCode == RESULT_CANCELED && statusCode == GoogleSignInStatusCodes.SIGN_IN_CANCELLED) {
             toast("Vinculação com Google Drive cancelada")
             return@registerForActivityResult
         }
 
-        toast("Falha ao vincular conta Google Drive")
+        if (statusCode == GoogleSignInStatusCodes.DEVELOPER_ERROR) {
+            val oauthDebugInfo = youtubeLiveHandler?.oauthDebugInfo() ?: "oauthDebugInfo indisponível (live desativada)"
+            appendDiagnosticLog("DRIVE_OAUTH_DEBUG_INFO: $oauthDebugInfo")
+            ErrorFileLogger.logInfo(this, "DRIVE_OAUTH_DEBUG_INFO", oauthDebugInfo)
+        }
+
+        toast("Falha ao vincular conta Google Drive: $statusHint")
+        status("Falha vinculação Drive: $statusHint")
     }
 
     private fun ensureRootLogPermission() {
