@@ -147,7 +147,7 @@ Para atender ao rebuild cross-platform, foi adicionada uma base React Native/Exp
 - Guia técnico: `docs/cross-platform-rebuild.md`
 - App novo: `cross-platform/replaycam-mobile`
 
-Essa base replica o fluxo principal do ReplayCam e já organiza o projeto para evoluir as integrações nativas de gravação contínua, replay e live nos dois sistemas.
+Essa base replica o fluxo principal do ReplayCam (preview em tela, segmentos de 5s, buffer 20s, replay/exportação, permissões, retomada foreground/background, galeria, diagnóstico e bloco live por feature flag) e já organiza o projeto para evoluir as integrações nativas finais nos dois sistemas.
 
 ## Documentação funcional
 

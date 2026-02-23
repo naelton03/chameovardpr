@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text } from 'react-native';
+import { Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
 import { colors } from '../theme/colors';
 
 interface PrimaryButtonProps {
@@ -6,6 +6,7 @@ interface PrimaryButtonProps {
   onPress: () => void;
   disabled?: boolean;
   tone?: 'primary' | 'success' | 'danger';
+  fill?: boolean;
 }
 
 const toneColor = {
@@ -14,11 +15,12 @@ const toneColor = {
   danger: colors.danger
 };
 
-export function PrimaryButton({ label, onPress, disabled, tone = 'primary' }: PrimaryButtonProps) {
+export function PrimaryButton({ label, onPress, disabled, tone = 'primary', fill = true }: PrimaryButtonProps) {
   return (
     <Pressable
       style={({ pressed }) => [
         styles.button,
+        fill ? (styles.fill as ViewStyle) : null,
         { backgroundColor: toneColor[tone], opacity: disabled ? 0.45 : pressed ? 0.85 : 1 }
       ]}
       onPress={onPress}
@@ -31,13 +33,19 @@ export function PrimaryButton({ label, onPress, disabled, tone = 'primary' }: Pr
 
 const styles = StyleSheet.create({
   button: {
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center'
+    minHeight: 44,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  fill: {
+    flex: 1
   },
   label: {
     color: colors.textPrimary,
-    fontSize: 15,
+    fontSize: 13,
     fontWeight: '700'
   }
 });

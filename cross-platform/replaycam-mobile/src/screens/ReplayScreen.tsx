@@ -1,14 +1,10 @@
 import { useMemo, useState } from 'react';
-import { SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { CameraView } from 'expo-camera';
 import { useReplayController } from '../state/useReplayController';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { colors } from '../theme/colors';
-
-const formatClock = (value: number) => {
-  const minutes = String(Math.floor(value / 60)).padStart(2, '0');
-  const seconds = String(value % 60).padStart(2, '0');
-  return `${minutes}:${seconds}`;
-};
+import { formatClock } from '../utils/time';
 
 export function ReplayScreen() {
   const [liveTitle, setLiveTitle] = useState('ReplayCam Live');
@@ -22,11 +18,14 @@ export function ReplayScreen() {
     cameraOptions,
     selectedCameraId,
     setSelectedCameraId,
+    bindRecorder,
     startRecording,
     saveReplay,
     stopAndSaveSession,
     startLive,
-    stopLive
+    stopLive,
+    openGallery,
+    liveEnabled
   } = useReplayController();
 
   const selectedCamera = useMemo(
@@ -35,108 +34,123 @@ export function ReplayScreen() {
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>ReplayCam • Cross-Platform</Text>
-        <Text style={styles.subtitle}>Android + iOS com buffer contínuo e replay de 20 segundos.</Text>
+    <View style={styles.root}>
+      <CameraView style={styles.preview} facing="back" mute={false} ref={(ref) => bindRecorder(ref as never)} />
 
-        <View style={styles.panel}>
-          <Text style={styles.panelLabel}>Status</Text>
-          <Text style={styles.status}>{status.message}</Text>
-          <Text style={styles.timer}>{formatClock(elapsedSeconds)}</Text>
-        </View>
+      <View style={styles.topInfoContainer}>
+        <Text style={styles.brand}>ReplayCam</Text>
+        <Text style={styles.timer}>{formatClock(elapsedSeconds)}</Text>
+        <Text style={[styles.status, status.isError ? styles.statusError : null]}>{status.message}</Text>
+      </View>
 
-        <View style={styles.panel}>
-          <Text style={styles.panelLabel}>Câmera traseira</Text>
-          {cameraOptions.map((camera) => (
-            <PrimaryButton
-              key={camera.id}
-              label={`${camera.label} • ${camera.maxFps}fps • ${camera.maxResolution}`}
-              onPress={() => setSelectedCameraId(camera.id)}
-              tone={selectedCameraId === camera.id ? 'success' : 'primary'}
-              disabled={isRecording}
-            />
-          ))}
-          {selectedCamera && (
-            <Text style={styles.smallInfo}>
-              Zoom {selectedCamera.maxZoom}x • Multi-câmera:{' '}
-              {selectedCamera.isLogicalMultiCamera ? 'Sim' : 'Não'}
-            </Text>
-          )}
-        </View>
-
-        <View style={styles.panel}>
-          <Text style={styles.panelLabel}>Controles de gravação</Text>
-          <PrimaryButton label="Começar gravação contínua" onPress={startRecording} disabled={isRecording} />
-          <PrimaryButton label="Salvar replay (20s)" onPress={saveReplay} disabled={!isRecording} tone="success" />
+      <View style={styles.bottomPanel}>
+        <Text style={styles.panelLabel}>Câmera traseira</Text>
+        {cameraOptions.map((camera) => (
           <PrimaryButton
-            label="Parar e salvar sessão completa"
-            onPress={stopAndSaveSession}
-            disabled={!isRecording}
-            tone="danger"
+            key={camera.id}
+            label={`${camera.label} • ${camera.maxFps}fps • ${camera.maxResolution}`}
+            onPress={() => setSelectedCameraId(camera.id)}
+            tone={selectedCameraId === camera.id ? 'success' : 'primary'}
+            disabled={isRecording}
           />
-        </View>
+        ))}
+        {selectedCamera && (
+          <Text style={styles.smallInfo}>
+            Zoom {selectedCamera.maxZoom}x • Multi-câmera: {selectedCamera.isLogicalMultiCamera ? 'Sim' : 'Não'}
+          </Text>
+        )}
 
-        <View style={styles.panel}>
-          <Text style={styles.panelLabel}>LIVE YouTube / RTMP</Text>
-          <TextInput value={liveTitle} onChangeText={setLiveTitle} style={styles.input} placeholderTextColor={colors.textSecondary} />
-          <View style={styles.inlineButtons}>
-            {(['public', 'unlisted', 'private'] as const).map((privacy) => (
-              <PrimaryButton
-                key={privacy}
-                label={privacy.toUpperCase()}
-                onPress={() => setLivePrivacy(privacy)}
-                tone={livePrivacy === privacy ? 'success' : 'primary'}
-              />
-            ))}
-          </View>
+        <View style={styles.row}>
+          <PrimaryButton label="Abrir galeria/pasta" onPress={openGallery} tone="primary" />
           <PrimaryButton
-            label={isLive ? 'Encerrar LIVE' : 'Iniciar LIVE'}
+            label={isLive ? 'Encerrar LIVE' : 'LIVE'}
             onPress={() => (isLive ? stopLive() : startLive({ title: liveTitle, privacy: livePrivacy }))}
             tone={isLive ? 'danger' : 'primary'}
+            disabled={!liveEnabled}
           />
         </View>
-      </ScrollView>
-    </SafeAreaView>
+
+        <TextInput
+          value={liveTitle}
+          onChangeText={setLiveTitle}
+          style={styles.input}
+          placeholder="Título da LIVE"
+          placeholderTextColor={colors.textSecondary}
+        />
+
+        <View style={styles.row}>
+          {(['public', 'unlisted', 'private'] as const).map((privacy) => (
+            <PrimaryButton
+              key={privacy}
+              label={privacy.toUpperCase()}
+              onPress={() => setLivePrivacy(privacy)}
+              tone={livePrivacy === privacy ? 'success' : 'primary'}
+              disabled={!liveEnabled}
+            />
+          ))}
+        </View>
+
+        <View style={styles.row}>
+          <PrimaryButton label="Iniciar" onPress={startRecording} disabled={isRecording} tone="success" />
+          <PrimaryButton label="Replay 20s" onPress={saveReplay} disabled={!isRecording} tone="primary" />
+          <PrimaryButton label="Parar" onPress={stopAndSaveSession} disabled={!isRecording} tone="danger" />
+        </View>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  root: {
     flex: 1,
-    backgroundColor: colors.background
+    backgroundColor: '#000'
   },
-  content: {
-    padding: 16,
-    gap: 12
+  preview: {
+    ...StyleSheet.absoluteFillObject
   },
-  title: {
+  topInfoContainer: {
+    marginTop: 56,
+    marginHorizontal: 16,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(20, 31, 48, 0.72)',
+    gap: 8
+  },
+  brand: {
     color: colors.textPrimary,
-    fontSize: 22,
-    fontWeight: '800'
+    fontWeight: '800',
+    fontSize: 18
   },
-  subtitle: {
-    color: colors.textSecondary,
-    marginBottom: 4
+  timer: {
+    alignSelf: 'flex-start',
+    color: colors.warning,
+    fontWeight: '900',
+    fontSize: 26
   },
-  panel: {
-    backgroundColor: colors.panel,
+  status: {
+    color: colors.textPrimary,
+    fontSize: 14
+  },
+  statusError: {
+    color: colors.danger
+  },
+  bottomPanel: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 16,
     borderRadius: 14,
-    padding: 14,
-    gap: 10
+    backgroundColor: 'rgba(16, 25, 41, 0.92)',
+    padding: 12,
+    gap: 8
   },
   panelLabel: {
     color: colors.textPrimary,
-    fontWeight: '700',
-    fontSize: 16
+    fontWeight: '700'
   },
-  status: {
-    color: colors.textSecondary
-  },
-  timer: {
-    color: colors.warning,
-    fontWeight: '800',
-    fontSize: 28
+  row: {
+    flexDirection: 'row',
+    gap: 8
   },
   smallInfo: {
     color: colors.textSecondary,
@@ -148,8 +162,5 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingHorizontal: 12,
     paddingVertical: 10
-  },
-  inlineButtons: {
-    gap: 8
   }
 });

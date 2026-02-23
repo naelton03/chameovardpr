@@ -18,3 +18,16 @@ export interface ReplayStatus {
   message: string;
   isError?: boolean;
 }
+
+export interface SegmentInfo {
+  uri: string;
+  startedAt: number;
+  endedAt: number;
+  durationSec: number;
+}
+
+export interface PermissionSnapshot {
+  camera: boolean;
+  microphone: boolean;
+  mediaLibrary: boolean;
+}
