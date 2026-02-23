@@ -1,0 +1,140 @@
+package com.example.replaycam
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.util.Log
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInClient
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
+import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
+import com.google.api.client.http.InputStreamContent
+import com.google.api.client.http.javanet.NetHttpTransport
+import com.google.api.client.json.gson.GsonFactory
+import com.google.api.services.drive.Drive
+import com.google.api.services.drive.DriveScopes
+import com.google.api.services.drive.model.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+class DriveUploadManager(private val context: Context) {
+
+    private val tag = "DriveUploadManager"
+    var lastSignInStatusCode: Int? = null
+        private set
+
+    private val signInClient: GoogleSignInClient by lazy {
+        val webClientId = context.getString(R.string.google_web_client_id).trim()
+        val options = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+            .apply {
+                if (webClientId.isNotBlank()) {
+                    requestIdToken(webClientId)
+                    requestServerAuthCode(webClientId)
+                }
+            }
+            .build()
+
+        GoogleSignIn.getClient(context, options)
+    }
+
+    fun authIntent(): Intent = signInClient.signInIntent
+
+    fun parseSignInResult(data: Intent?): GoogleSignInAccount? {
+        return try {
+            val account = GoogleSignIn.getSignedInAccountFromIntent(data).getResult(ApiException::class.java)
+            lastSignInStatusCode = null
+            account
+        } catch (error: ApiException) {
+            lastSignInStatusCode = error.statusCode
+            Log.w(tag, "Falha no Google Sign-In Drive status=${error.statusCode}", error)
+            null
+        }
+    }
+
+    fun linkedAccount(): GoogleSignInAccount? {
+        val account = GoogleSignIn.getLastSignedInAccount(context) ?: return null
+        return if (GoogleSignIn.hasPermissions(account, Scope(DriveScopes.DRIVE_FILE))) account else null
+    }
+
+    fun linkedEmail(): String? = linkedAccount()?.email
+
+    fun isLinked(): Boolean = linkedAccount() != null
+
+    suspend fun signOut() = withContext(Dispatchers.Main) {
+        signInClient.signOut()
+    }
+
+    suspend fun uploadVideo(videoUri: Uri, displayName: String, dateFolderName: String): Result<String> {
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val account = linkedAccount() ?: error("Conta Google Drive não vinculada")
+                val accountRef = account.account ?: error("Conta Google sem AccountManager entry")
+
+                val credential = GoogleAccountCredential.usingOAuth2(
+                    context,
+                    listOf(DriveScopes.DRIVE_FILE)
+                ).apply {
+                    selectedAccount = accountRef
+                }
+
+                val drive = Drive.Builder(
+                    NetHttpTransport(),
+                    GsonFactory.getDefaultInstance(),
+                    credential
+                ).setApplicationName(context.getString(R.string.app_name)).build()
+
+                val folderId = ensureDateFolder(drive, dateFolderName)
+
+                val metadata = File().apply {
+                    name = displayName
+                    parents = listOf(folderId)
+                    mimeType = "video/mp4"
+                }
+
+                val input = context.contentResolver.openInputStream(videoUri)
+                    ?: error("Não foi possível abrir vídeo para upload")
+                input.use { stream ->
+                    val content = InputStreamContent("video/mp4", stream)
+                    val uploaded = drive.files().create(metadata, content)
+                        .setFields("id,name,webViewLink")
+                        .execute()
+                    uploaded.id ?: error("Upload concluído sem ID")
+                }
+            }
+        }
+    }
+
+    private fun ensureDateFolder(drive: Drive, folderName: String): String {
+        val escapedName = folderName.replace("'", "\\'")
+        val query = "mimeType='application/vnd.google-apps.folder' and trashed=false and name='$escapedName'"
+
+        val existing = drive.files().list()
+            .setQ(query)
+            .setSpaces("drive")
+            .setFields("files(id,name)")
+            .setPageSize(10)
+            .execute()
+            .files
+            ?.firstOrNull()
+
+        if (existing != null && !existing.id.isNullOrBlank()) {
+            return existing.id
+        }
+
+        val folderMeta = File().apply {
+            name = folderName
+            mimeType = "application/vnd.google-apps.folder"
+        }
+
+        val created = drive.files().create(folderMeta)
+            .setFields("id")
+            .execute()
+
+        return created.id ?: error("Falha ao criar pasta no Drive")
+    }
+}
