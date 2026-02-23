@@ -1,4 +1,4 @@
-name: Android APK
+name: Mobile Builds (Android + iOS)
 
 on:
   push:
@@ -46,5 +46,61 @@ jobs:
         with:
           name: replaycam-debug-apk-${{ github.run_number }}
           path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+  build-ios-simulator-app:
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: cross-platform/replaycam-mobile
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cross-platform/replaycam-mobile/package.json
+
+      - name: Install JavaScript dependencies
+        run: npm install
+
+      - name: Generate iOS native project from Expo
+        run: npx expo prebuild --platform ios --non-interactive
+
+      - name: Build iOS app for Simulator (unsigned)
+        run: |
+          xcodebuild \
+            -workspace ios/ReplayCam.xcworkspace \
+            -scheme ReplayCam \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build/ios-derived \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Prepare versioned iOS artifact
+        run: |
+          mkdir -p dist
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            VERSION_TAG="pr-${{ github.event.pull_request.number }}-run-${{ github.run_number }}"
+          else
+            SAFE_REF="$(echo "${{ github.ref_name }}" | sed 's#[^A-Za-z0-9._-]#-#g')"
+            VERSION_TAG="${SAFE_REF}-run-${{ github.run_number }}"
+          fi
+          APP_SRC="build/ios-derived/Build/Products/Debug-iphonesimulator/ReplayCam.app"
+          APP_ZIP="dist/replaycam-ios-simulator-${VERSION_TAG}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "${APP_SRC}" "${APP_ZIP}"
+          shasum -a 256 "${APP_ZIP}" > "${APP_ZIP}.sha256"
+
+      - name: Upload iOS artifact (versioned per run/PR)
+        uses: actions/upload-artifact@v4
+        with:
+          name: replaycam-ios-simulator-${{ github.run_number }}
+          path: cross-platform/replaycam-mobile/dist/
           if-no-files-found: error
           retention-days: 14
