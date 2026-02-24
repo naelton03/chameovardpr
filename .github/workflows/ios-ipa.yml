@@ -1,0 +1,95 @@
+name: ios-ipa
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "cross-platform/replaycam-mobile/**"
+      - ".github/workflows/ios-ipa.yml"
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-ios-simulator-ipa:
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: cross-platform/replaycam-mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install JS dependencies
+        run: npm install
+
+      - name: Setup CocoaPods
+        uses: maxim-lobanov/setup-cocoapods@v1
+        with:
+          version: latest
+
+      - name: Generate iOS native project (Expo prebuild)
+        run: npx expo prebuild --platform ios --non-interactive
+
+      - name: Install pods
+        run: |
+          cd ios
+          pod install --repo-update
+
+      - name: Resolve workspace and scheme
+        id: ios_meta
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find ios -name '*.xcworkspace' | head -n 1)"
+          if [ -z "$WORKSPACE" ]; then
+            echo "Workspace não encontrado em ios/."
+            exit 1
+          fi
+
+          SCHEME="$(python -c "import json,subprocess; raw=subprocess.check_output(['xcodebuild','-list','-json','-workspace','$WORKSPACE'], text=True); obj=json.loads(raw); schemes=obj.get('workspace',{}).get('schemes',[]); print(schemes[0] if schemes else '')")"
+          if [ -z "$SCHEME" ]; then
+            echo "Scheme não encontrado no workspace iOS."
+            exit 1
+          fi
+
+          echo "workspace=$WORKSPACE" >> "$GITHUB_OUTPUT"
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+
+      - name: Build iOS simulator app (Release)
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -workspace "${{ steps.ios_meta.outputs.workspace }}" \
+            -scheme "${{ steps.ios_meta.outputs.scheme }}" \
+            -configuration Release \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA for Appetize
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/Build/Products/Release-iphonesimulator -name '*.app' | head -n 1)"
+          if [ -z "$APP_PATH" ]; then
+            echo "App .app não encontrado após build."
+            exit 1
+          fi
+
+          mkdir -p dist/Payload
+          cp -R "$APP_PATH" dist/Payload/
+          (cd dist && zip -qry replaycam-ios-simulator.ipa Payload)
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: replaycam-ios-simulator-ipa
+          path: cross-platform/replaycam-mobile/dist/replaycam-ios-simulator.ipa
+          if-no-files-found: error
