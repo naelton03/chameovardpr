@@ -1,106 +1,72 @@
-name: Mobile Builds (Android + iOS)
+name: android-apk
 
 on:
-  push:
-    branches: ["**"]
-  pull_request:
   workflow_dispatch:
+  push:
+    branches: ["main"]
+    paths:
+      - "cross-platform/replaycam-mobile/**"
+      - ".github/workflows/android-apk.yml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "cross-platform/replaycam-mobile/**"
+      - ".github/workflows/android-apk.yml"
+
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build-debug-apk:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-
-      - name: Setup Gradle 8.7
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: 8.7
-
-      - name: Build debug APK
-        run: gradle assembleDebug
-
-      - name: Prepare versioned downloadable artifact
-        run: |
-          mkdir -p dist
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            VERSION_TAG="pr-${{ github.event.pull_request.number }}-run-${{ github.run_number }}"
-          else
-            SAFE_REF="$(echo "${{ github.ref_name }}" | sed 's#[^A-Za-z0-9._-]#-#g')"
-            VERSION_TAG="${SAFE_REF}-run-${{ github.run_number }}"
-          fi
-          APK_NAME="replaycam-debug-${VERSION_TAG}.apk"
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/${APK_NAME}"
-          sha256sum "dist/${APK_NAME}" > "dist/${APK_NAME}.sha256"
-
-      - name: Upload APK artifact (versioned per run/PR)
-        uses: actions/upload-artifact@v4
-        with:
-          name: replaycam-debug-apk-${{ github.run_number }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 14
-
-  build-ios-simulator-app:
-    runs-on: macos-latest
+  build-android-apk:
+    runs-on: ubuntu-22.04
     defaults:
       run:
         working-directory: cross-platform/replaycam-mobile
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node 20
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: cross-platform/replaycam-mobile/package.json
 
-      - name: Install JavaScript dependencies
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install JS dependencies
         run: npm install
 
-      - name: Generate iOS native project from Expo
-        run: npx expo prebuild --platform ios --non-interactive
+      - name: Generate Android native project (Expo prebuild)
+        run: npx expo prebuild --platform android --non-interactive
 
-      - name: Build iOS app for Simulator (unsigned)
+      - name: Build Release APK
         run: |
-          xcodebuild \
-            -workspace ios/ReplayCam.xcworkspace \
-            -scheme ReplayCam \
-            -configuration Debug \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build/ios-derived \
-            CODE_SIGNING_ALLOWED=NO
+          set -euo pipefail
+          cd android
+          ./gradlew --no-daemon assembleRelease
 
-      - name: Prepare versioned iOS artifact
+      - name: Collect APK
         run: |
-          mkdir -p dist
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            VERSION_TAG="pr-${{ github.event.pull_request.number }}-run-${{ github.run_number }}"
-          else
-            SAFE_REF="$(echo "${{ github.ref_name }}" | sed 's#[^A-Za-z0-9._-]#-#g')"
-            VERSION_TAG="${SAFE_REF}-run-${{ github.run_number }}"
+          set -euo pipefail
+          APK_PATH="$(find android/app/build/outputs/apk/release -name '*.apk' | head -n 1)"
+          if [ -z "$APK_PATH" ]; then
+            echo "APK não encontrado em android/app/build/outputs/apk/release"
+            exit 1
           fi
-          APP_SRC="build/ios-derived/Build/Products/Debug-iphonesimulator/ReplayCam.app"
-          APP_ZIP="dist/replaycam-ios-simulator-${VERSION_TAG}.zip"
-          ditto -c -k --sequesterRsrc --keepParent "${APP_SRC}" "${APP_ZIP}"
-          shasum -a 256 "${APP_ZIP}" > "${APP_ZIP}.sha256"
+          mkdir -p dist
+          cp "$APK_PATH" dist/replaycam-android-release.apk
 
-      - name: Upload iOS artifact (versioned per run/PR)
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: replaycam-ios-simulator-${{ github.run_number }}
-          path: cross-platform/replaycam-mobile/dist/
+          name: replaycam-android-apk
+          path: cross-platform/replaycam-mobile/dist/replaycam-android-release.apk
           if-no-files-found: error
-          retention-days: 14

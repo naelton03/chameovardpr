@@ -34,17 +34,7 @@ Este documento define o branding oficial do app **ReplayOn** para produto, desig
 - Uso principal em fundo escuro para reforçar contraste e brilho.
 
 ### Ícone do app (launcher)
-No app Android, o ícone foi configurado com:
-- foreground vetorial: `@drawable/ic_replayon_foreground`
-- adaptive icon: `@mipmap-anydpi-v26/ic_launcher` e `ic_launcher_round`
-- background: `@color/ic_launcher_background`
-
-Referências técnicas:
-- `app/src/main/res/drawable/ic_replayon_foreground.xml`
-- `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`
-- `app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml`
-- `app/src/main/res/values/colors.xml`
-- `app/src/main/AndroidManifest.xml`
+No app cross-platform (Expo), branding visual (nome, tema escuro e splash) deve ser mantido via configuração do projeto em `cross-platform/replaycam-mobile/app.json` e assets associados.
 
 ### Assinatura textual
 - **ReplayOn** (sempre com "R" e "O" maiúsculos)
@@ -125,13 +115,9 @@ Referências técnicas:
 4. Mudanças visuais relevantes devem atualizar este documento.
 
 ### Arquivos atualmente ligados ao branding
-- `app/src/main/AndroidManifest.xml`
-- `app/src/main/res/drawable/ic_replayon_foreground.xml`
-- `app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml`
-- `app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml`
-- `app/src/main/res/values/colors.xml`
-- `app/src/main/res/layout/activity_main.xml`
-- `app/src/main/res/values/strings.xml`
+- `cross-platform/replaycam-mobile/app.json`
+- `cross-platform/replaycam-mobile/src/theme/colors.ts`
+- `cross-platform/replaycam-mobile/src/screens/ReplayScreen.tsx`
 
 ---
 
