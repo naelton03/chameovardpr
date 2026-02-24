@@ -7,6 +7,11 @@ on:
     paths:
       - "cross-platform/replaycam-mobile/**"
       - ".github/workflows/ios-ipa.yml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "cross-platform/replaycam-mobile/**"
+      - ".github/workflows/ios-ipa.yml"
 
 concurrency:
   group: ios-ipa-${{ github.ref }}

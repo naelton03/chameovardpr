@@ -7,6 +7,11 @@ on:
     paths:
       - "cross-platform/replaycam-mobile/**"
       - ".github/workflows/android-apk.yml"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "cross-platform/replaycam-mobile/**"
+      - ".github/workflows/android-apk.yml"
 
 concurrency:
   group: android-apk-${{ github.ref }}
