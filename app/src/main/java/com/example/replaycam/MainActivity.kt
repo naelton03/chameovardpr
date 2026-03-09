@@ -14,6 +14,7 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.media.MediaCodec
 import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
 import android.net.Uri
@@ -115,6 +116,13 @@ class MainActivity : AppCompatActivity() {
     private val prefVideoQuality = "video_quality"
     private val prefVideoFps = "video_fps"
 
+    private val instagramTargetWidth = 1080
+    private val instagramTargetHeight = 1920
+    private val instagramBitrateMin = 10_000_000
+    private val instagramBitrateMax = 15_000_000
+    private val instagramAudioBitrate = 128_000
+    private val instagramAudioSampleRate = 44_100
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -129,7 +137,7 @@ class MainActivity : AppCompatActivity() {
     private val replayDurationOptionsSec = intArrayOf(10, 15, 20, 25, 30, 35, 40)
     private val replayTypeOptions = arrayOf("GOL", "DEFESA", "LANCE")
     private var replayDurationSec = 20
-    private var selectedVideoQuality = "AUTO"
+    private var selectedVideoQuality = "1080"
     private var selectedVideoFps = 30
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
@@ -315,7 +323,7 @@ class MainActivity : AppCompatActivity() {
         replayDurationSec = appPrefs.getInt(prefReplayDurationSec, 20).let { configured ->
             if (replayDurationOptionsSec.contains(configured)) configured else 20
         }
-        selectedVideoQuality = appPrefs.getString(prefVideoQuality, "AUTO") ?: "AUTO"
+        selectedVideoQuality = appPrefs.getString(prefVideoQuality, "1080") ?: "1080"
         selectedVideoFps = appPrefs.getInt(prefVideoFps, 30).let { configured -> if (configured == 60) 60 else 30 }
         driveUploadManager = DriveUploadManager(this)
         if (FeatureToggles.isLiveEnabled) {
@@ -903,13 +911,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun supportedQualityOptions(capability: RuntimeCameraCapability?): List<String> {
-        if (capability == null) return listOf("1080", "720")
-        val options = mutableListOf<String>()
-        if (capability.supportsUhd) options.add("4K")
-        if (capability.supportsFhd) options.add("1080")
-        if (capability.supportsHd) options.add("720")
-        if (options.isEmpty()) options.add("1080")
-        return options
+        if (capability == null) return listOf("1080")
+        return if (capability.supportsFhd) listOf("1080") else listOf("720")
     }
 
     private fun supportedFpsOptions(capability: RuntimeCameraCapability?): List<Int> {
@@ -924,6 +927,85 @@ class MainActivity : AppCompatActivity() {
     private fun applyZoomRatio(zoomRatio: Float) {
         boundCamera?.cameraControl?.setZoomRatio(zoomRatio)
         status("Status: zoom ${formatZoomRatio(zoomRatio)}x")
+    }
+
+    private fun targetVideoBitrateForFps(fps: Int): Int {
+        val proposed = if (fps >= 60) 14_000_000 else 12_000_000
+        return proposed.coerceIn(instagramBitrateMin, instagramBitrateMax)
+    }
+
+    data class SavedVideoQualityReport(
+        val videoCodec: String,
+        val videoWidth: Int,
+        val videoHeight: Int,
+        val videoFps: Int,
+        val videoBitrate: Int,
+        val audioCodec: String,
+        val audioBitrate: Int,
+        val audioSampleRate: Int,
+        val issues: List<String>
+    ) {
+        fun summary(): String {
+            val base = "video=$videoCodec ${videoWidth}x${videoHeight} ${videoFps}fps ${videoBitrate / 1_000_000.0}Mbps | audio=$audioCodec ${audioSampleRate}Hz ${audioBitrate / 1_000.0}kbps"
+            return if (issues.isEmpty()) "$base | OK" else "$base | ajustes: ${issues.joinToString("; ")}"
+        }
+    }
+
+    private fun inspectSavedVideoQuality(savedUri: Uri, expectedFps: Int): SavedVideoQualityReport? {
+        return runCatching {
+            val extractor = MediaExtractor()
+            extractor.setDataSource(this, savedUri, null)
+            var videoCodec = "n/a"
+            var width = 0
+            var height = 0
+            var fps = 0
+            var bitrate = 0
+            var audioCodec = "n/a"
+            var audioBitrate = 0
+            var audioSampleRate = 0
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("video/")) {
+                    videoCodec = mime
+                    width = format.getInteger(MediaFormat.KEY_WIDTH)
+                    height = format.getInteger(MediaFormat.KEY_HEIGHT)
+                    fps = if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE) else 0
+                    bitrate = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 0
+                } else if (mime.startsWith("audio/")) {
+                    audioCodec = mime
+                    audioBitrate = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 0
+                    audioSampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 0
+                }
+            }
+            extractor.release()
+
+            val issues = mutableListOf<String>()
+            if (!videoCodec.contains("avc")) issues.add("codec de vídeo fora do H.264/AVC")
+            if (!((width == instagramTargetWidth && height == instagramTargetHeight) || (width == instagramTargetHeight && height == instagramTargetWidth))) {
+                issues.add("resolução fora de 1080x1920")
+            }
+            if (fps > 0 && kotlin.math.abs(fps - expectedFps) > 2) issues.add("FPS diferente do alvo $expectedFps")
+            if (bitrate > 0 && bitrate !in instagramBitrateMin..instagramBitrateMax) issues.add("bitrate fora de 10-15Mbps")
+            if (!audioCodec.contains("mp4a") && !audioCodec.contains("aac")) issues.add("codec de áudio fora de AAC")
+            if (audioBitrate > 0 && audioBitrate !in 128_000..192_000) issues.add("bitrate de áudio fora de 128-192kbps")
+            if (audioSampleRate > 0 && audioSampleRate != instagramAudioSampleRate) issues.add("sample rate diferente de 44.1kHz")
+
+            SavedVideoQualityReport(
+                videoCodec = videoCodec,
+                videoWidth = width,
+                videoHeight = height,
+                videoFps = fps,
+                videoBitrate = bitrate,
+                audioCodec = audioCodec,
+                audioBitrate = audioBitrate,
+                audioSampleRate = audioSampleRate,
+                issues = issues
+            )
+        }.onFailure { error ->
+            appendDiagnosticLog("Falha na inspeção de qualidade do vídeo: ${error.message}", error)
+        }.getOrNull()
     }
 
     private fun detectCameraCapabilities(): List<RuntimeCameraCapability> {
@@ -1015,9 +1097,24 @@ class MainActivity : AppCompatActivity() {
             orderedQualityNames.map { qualityToCameraX(it) }
         )
 
-        val recorder = Recorder.Builder()
+        val targetVideoBitrate = targetVideoBitrateForFps(selectedVideoFps)
+        val recorderBuilder = Recorder.Builder()
             .setQualitySelector(qualitySelector)
-            .build()
+
+        runCatching {
+            val method = recorderBuilder.javaClass.getMethod("setTargetVideoEncodingBitRate", Int::class.javaPrimitiveType)
+            method.invoke(recorderBuilder, targetVideoBitrate)
+        }
+        runCatching {
+            val method = recorderBuilder.javaClass.getMethod("setTargetAudioEncodingBitRate", Int::class.javaPrimitiveType)
+            method.invoke(recorderBuilder, instagramAudioBitrate)
+        }
+        runCatching {
+            val method = recorderBuilder.javaClass.getMethod("setTargetAudioSampleRate", Int::class.javaPrimitiveType)
+            method.invoke(recorderBuilder, instagramAudioSampleRate)
+        }
+
+        val recorder = recorderBuilder.build()
 
         videoCapture = VideoCapture.withOutput(recorder)
 
@@ -1059,7 +1156,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
             val cameraDescription = selectedCameraCapability?.displayLabel() ?: "traseira padrão"
-            status("Status: câmera pronta ($cameraDescription) • ${qualityOptionLabel(preferredQuality)} • ${requestedFps}FPS")
+            status("Status: câmera pronta ($cameraDescription) • ${qualityOptionLabel(preferredQuality)} • ${requestedFps}FPS • ${targetVideoBitrate / 1_000_000}Mbps")
         } catch (exc: Exception) {
             boundCamera = null
             ErrorFileLogger.logError(this, "START_CAMERA", exc)
@@ -1264,6 +1361,12 @@ class MainActivity : AppCompatActivity() {
         }
 
         toast("Gravação completa salva")
+        inspectSavedVideoQuality(savedUri, selectedVideoFps)?.let { report ->
+            appendDiagnosticLog("Recording quality check: ${report.summary()}")
+            if (report.issues.isNotEmpty()) {
+                toast("Gravação salva com alertas de qualidade")
+            }
+        }
         maybeUploadVideoToDrive(savedUri, outputName)
     }
 
@@ -1341,6 +1444,12 @@ class MainActivity : AppCompatActivity() {
 
                 status("Status: replay ${replayType.lowercase()} salvo na galeria")
                 toast("Replay $replayType salvo")
+                inspectSavedVideoQuality(savedUri, selectedVideoFps)?.let { report ->
+                    appendDiagnosticLog("Replay quality check: ${report.summary()}")
+                    if (report.issues.isNotEmpty()) {
+                        toast("Replay salvo com alertas de qualidade")
+                    }
+                }
                 maybeUploadVideoToDrive(savedUri, outputName)
             } finally {
                 binding.replayButton.isEnabled = isContinuousRecording
