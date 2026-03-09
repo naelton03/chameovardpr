@@ -31,9 +31,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: cross-platform/replaycam-mobile/package-lock.json
+
+      - name: Ensure lockfile exists
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            echo "ERRO: package-lock.json ausente."
+            echo "Para garantir build determinístico, gere e commite o lockfile:"
+            echo "  cd cross-platform/replaycam-mobile && npm install --package-lock-only"
+            exit 1
+          fi
 
       - name: Install JS dependencies
-        run: npm install
+        run: npm ci --no-audit --no-fund
 
       - name: Setup CocoaPods
         uses: maxim-lobanov/setup-cocoapods@v1
