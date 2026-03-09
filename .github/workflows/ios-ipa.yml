@@ -20,6 +20,8 @@ concurrency:
 jobs:
   build-ios-simulator-ipa:
     runs-on: macos-14
+    env:
+      NODE_ENV: production
     defaults:
       run:
         working-directory: cross-platform/replaycam-mobile
@@ -32,8 +34,24 @@ jobs:
         with:
           node-version: 20
 
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node20-npm-${{ hashFiles('cross-platform/replaycam-mobile/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node20-npm-
+
+      - name: Ensure lockfile exists (auto-generate in CI if missing)
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            echo "AVISO: package-lock.json ausente; gerando lockfile no CI para permitir npm ci."
+            npm install --package-lock-only --no-audit --no-fund
+          fi
+
       - name: Install JS dependencies
-        run: npm install
+        run: npm ci --no-audit --no-fund
 
       - name: Setup CocoaPods
         uses: maxim-lobanov/setup-cocoapods@v1

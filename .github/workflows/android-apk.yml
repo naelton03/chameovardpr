@@ -20,6 +20,9 @@ concurrency:
 jobs:
   build-android-apk:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      NODE_ENV: production
     defaults:
       run:
         working-directory: cross-platform/replaycam-mobile
@@ -32,6 +35,22 @@ jobs:
         with:
           node-version: 20
 
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node20-npm-${{ hashFiles('cross-platform/replaycam-mobile/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node20-npm-
+
+      - name: Ensure lockfile exists (auto-generate in CI if missing)
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            echo "AVISO: package-lock.json ausente; gerando lockfile no CI para permitir npm ci."
+            npm install --package-lock-only --no-audit --no-fund
+          fi
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -41,8 +60,11 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install JS dependencies
-        run: npm install
+        run: npm ci --no-audit --no-fund
 
       - name: Generate Android native project (Expo prebuild)
         run: npx expo prebuild --platform android --non-interactive
@@ -51,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           cd android
-          ./gradlew --no-daemon assembleRelease
+          ./gradlew --no-daemon --build-cache --parallel --configure-on-demand assembleRelease
 
       - name: Collect APK
         run: |

@@ -1,13 +1,17 @@
 import * as FileSystem from 'expo-file-system';
 import { timestampTag } from '../utils/time';
-import type { CameraOption, LiveConfig, SavedVideoInfo, SegmentInfo } from '../types/replay';
+import type { CameraOption, LiveConfig, RecordingPreference, ReplayPlayType, SavedVideoInfo, SegmentInfo } from '../types/replay';
 import { ReplayBuffer } from './replayBuffer';
 import { appendDiagnosticLog } from './logger';
 import { saveToReplayAlbum } from './gallery';
 import { composeSegmentsToMp4, selectReplayWindowSegments } from './videoComposer';
 
 interface CameraRecorder {
-  recordAsync: (options?: { maxDuration?: number; mute?: boolean }) => Promise<{ uri: string }>;
+  recordAsync: (options?: {
+    maxDuration?: number;
+    mute?: boolean;
+    videoBitrate?: number;
+  }) => Promise<{ uri: string }>;
   stopRecording: () => void;
 }
 
@@ -21,6 +25,7 @@ export class ReplayEngine {
   private sessionSegments: SegmentInfo[] = [];
   private activeRecorder: CameraRecorder | null = null;
   private boundaryPromise: Promise<void> | null = null;
+  private recordingPreference: RecordingPreference = { fps: 30, quality: '1080' };
 
   private completedSegmentsCount() {
     return this.sessionSegments.length;
@@ -39,24 +44,38 @@ export class ReplayEngine {
     ];
   }
 
-  async startContinuousRecording(cameraId: string, recorder: CameraRecorder): Promise<void> {
+  async startContinuousRecording(cameraId: string, recorder: CameraRecorder, recordingPreference?: RecordingPreference): Promise<void> {
     if (this.isRecording) return;
     this.isRecording = true;
     this.activeRecorder = recorder;
+    this.recordingPreference = recordingPreference ?? this.recordingPreference;
     this.buffer.clear();
     this.sessionSegments = [];
-    await appendDiagnosticLog(`startContinuousRecording camera=${cameraId}`);
+    await appendDiagnosticLog(`startContinuousRecording camera=${cameraId} fps=${this.recordingPreference.fps} quality=${this.recordingPreference.quality}`);
 
     this.recordingTask = this.captureLoop(recorder).finally(() => {
       this.recordingTask = null;
     });
   }
 
+  private resolveVideoBitrate() {
+    const profile = `${this.recordingPreference.quality}_${this.recordingPreference.fps}`;
+    const bitrates: Record<string, number> = {
+      '4K_60': 53000000,
+      '4K_30': 35000000,
+      '1080_60': 12000000,
+      '1080_30': 8000000,
+      '720_60': 7000000,
+      '720_30': 5000000
+    };
+    return bitrates[profile] ?? 8000000;
+  }
+
   private async captureLoop(recorder: CameraRecorder) {
     while (this.isRecording) {
       const start = Date.now();
       try {
-        const result = await recorder.recordAsync({ maxDuration: SEGMENT_SECONDS, mute: false });
+        const result = await recorder.recordAsync({ maxDuration: SEGMENT_SECONDS, mute: false, videoBitrate: this.resolveVideoBitrate() });
         const end = Date.now();
         const segment: SegmentInfo = {
           uri: result.uri,
@@ -96,7 +115,7 @@ export class ReplayEngine {
     });
   }
 
-  async saveReplayWindow(targetSeconds = 20): Promise<SavedVideoInfo> {
+  async saveReplayWindow(targetSeconds = 20, playType?: ReplayPlayType): Promise<SavedVideoInfo> {
     await this.forceSegmentBoundaryIfRecording();
 
     const buffered = this.buffer.replaySegments();
@@ -108,7 +127,8 @@ export class ReplayEngine {
     const selectedDuration = selected.reduce((acc, item) => acc + item.durationSec, 0);
     const expectedDuration = Math.min(targetSeconds, selectedDuration);
 
-    const fileName = `replay_${timestampTag()}.mp4`;
+    const playTypePrefix = playType ? `${playType}_` : '';
+    const fileName = `${playTypePrefix}replay_${timestampTag()}.mp4`;
     const localUri = `${FileSystem.cacheDirectory}${fileName}`;
 
     await composeSegmentsToMp4({
