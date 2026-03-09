@@ -117,6 +117,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var appPrefs: android.content.SharedPreferences
     private var autoUploadEnabled = false
     private val replayDurationOptionsSec = intArrayOf(10, 15, 20, 25, 30, 35, 40)
+    private val replayTypeOptions = arrayOf("GOL", "DEFESA", "LANCE")
     private var replayDurationSec = 20
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
@@ -314,7 +315,7 @@ class MainActivity : AppCompatActivity() {
                 if (isContinuousRecording) stopContinuousRecording() else startContinuousRecording(resetBuffer = true)
             }
         }
-        binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
+        binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { showReplayTypeDialog() } }
         updateReplayButtonLabel()
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         binding.menuButton.setOnClickListener { showMainMenu(it) }
@@ -1100,7 +1101,40 @@ class MainActivity : AppCompatActivity() {
         maybeUploadVideoToDrive(savedUri, outputName)
     }
 
-    private fun saveReplayBundle() {
+    private fun showReplayTypeDialog() {
+        var selectedTypeIndex = -1
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Selecione o tipo do replay")
+            .setSingleChoiceItems(replayTypeOptions, selectedTypeIndex) { _, which ->
+                selectedTypeIndex = which
+            }
+            .setPositiveButton("Salvar", null)
+            .create()
+
+        dialog.setOnShowListener {
+            val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            saveButton.isEnabled = false
+
+            val listView = dialog.listView
+            listView.setOnItemClickListener { _, _, position, _ ->
+                selectedTypeIndex = position
+                saveButton.isEnabled = true
+            }
+
+            saveButton.setOnClickListener {
+                if (selectedTypeIndex < 0) return@setOnClickListener
+                val replayType = replayTypeOptions[selectedTypeIndex]
+                dialog.dismiss()
+                saveReplayBundle(replayType)
+            }
+        }
+
+        dialog.setCancelable(false)
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.show()
+    }
+
+    private fun saveReplayBundle(replayType: String) {
         lifecycleScope.launch {
             binding.replayButton.isEnabled = false
 
@@ -1127,7 +1161,7 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                val outputName = "replay_${stamp}.mp4"
+                val outputName = "replay_${replayType.lowercase()}_${stamp}.mp4"
                 val savedUri = withContext(Dispatchers.IO) {
                     saveVideoToPublicGallery(mergedReplay, outputName)
                 }
@@ -1139,8 +1173,8 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                status("Status: replay salvo na galeria")
-                toast("Replay salvo")
+                status("Status: replay ${replayType.lowercase()} salvo na galeria")
+                toast("Replay $replayType salvo")
                 maybeUploadVideoToDrive(savedUri, outputName)
             } finally {
                 binding.replayButton.isEnabled = isContinuousRecording
