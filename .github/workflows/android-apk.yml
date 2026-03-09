@@ -20,6 +20,7 @@ concurrency:
 jobs:
   build-android-apk:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     env:
       NODE_ENV: production
     defaults:
@@ -59,6 +60,9 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install JS dependencies
         run: npm ci --no-audit --no-fund
 
@@ -69,7 +73,7 @@ jobs:
         run: |
           set -euo pipefail
           cd android
-          ./gradlew --no-daemon assembleRelease
+          ./gradlew --no-daemon --build-cache --parallel --configure-on-demand assembleRelease
 
       - name: Collect APK
         run: |
