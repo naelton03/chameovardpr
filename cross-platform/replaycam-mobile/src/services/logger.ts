@@ -21,9 +21,13 @@ export async function appendDiagnosticLog(line: string) {
   console.log(message.trim());
   if (!FileSystem.documentDirectory) return;
   await ensureFile();
-  await FileSystem.writeAsStringAsync(LOG_FILE, message, {
-    encoding: FileSystem.EncodingType.UTF8,
-    append: true
+
+  const current = await FileSystem.readAsStringAsync(LOG_FILE, {
+    encoding: FileSystem.EncodingType.UTF8
+  }).catch(() => '');
+
+  await FileSystem.writeAsStringAsync(LOG_FILE, `${current}${message}`, {
+    encoding: FileSystem.EncodingType.UTF8
   });
 }
 

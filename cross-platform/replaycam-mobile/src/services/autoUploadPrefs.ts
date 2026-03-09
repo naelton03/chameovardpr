@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system';
+import type { RecordingPreference } from '../types/replay';
 
 const PREFS_FILE = `${FileSystem.documentDirectory ?? ''}replaycam-prefs.json`;
 
@@ -8,6 +9,8 @@ type Prefs = {
   driveAccessToken: string | null;
   driveAccessTokenExpiryMs: number | null;
   replayDurationSec: number;
+  recordingFps: 30 | 60;
+  recordingQuality: RecordingPreference['quality'];
 };
 
 const defaultPrefs: Prefs = {
@@ -15,7 +18,9 @@ const defaultPrefs: Prefs = {
   driveLinkedEmail: null,
   driveAccessToken: null,
   driveAccessTokenExpiryMs: null,
-  replayDurationSec: 20
+  replayDurationSec: 20,
+  recordingFps: 30,
+  recordingQuality: '1080'
 };
 
 async function readPrefs(): Promise<Prefs> {
@@ -80,7 +85,6 @@ export async function clearDriveSession(): Promise<void> {
   });
 }
 
-
 export async function getReplayDurationSec(): Promise<number> {
   return (await readPrefs()).replayDurationSec;
 }
@@ -88,4 +92,14 @@ export async function getReplayDurationSec(): Promise<number> {
 export async function setReplayDurationSec(value: number): Promise<void> {
   const prefs = await readPrefs();
   await writePrefs({ ...prefs, replayDurationSec: value });
+}
+
+export async function getRecordingPreference(): Promise<RecordingPreference> {
+  const prefs = await readPrefs();
+  return { fps: prefs.recordingFps, quality: prefs.recordingQuality };
+}
+
+export async function setRecordingPreference(value: RecordingPreference): Promise<void> {
+  const prefs = await readPrefs();
+  await writePrefs({ ...prefs, recordingFps: value.fps, recordingQuality: value.quality });
 }
