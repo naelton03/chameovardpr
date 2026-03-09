@@ -1,13 +1,19 @@
 import { useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import { CameraView } from 'expo-camera';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useReplayController } from '../state/useReplayController';
 import { PrimaryButton } from '../components/PrimaryButton';
 import { colors } from '../theme/colors';
 import { formatClock } from '../utils/time';
+import type { ReplayPlayType } from '../types/replay';
+
+const PLAY_TYPE_OPTIONS: ReplayPlayType[] = ['GOL', 'DEFESA', 'LANCE'];
 
 export function ReplayScreen() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [saveTypeModalOpen, setSaveTypeModalOpen] = useState(false);
+  const [selectedPlayType, setSelectedPlayType] = useState<ReplayPlayType | null>(null);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const {
     isRecording,
@@ -25,12 +31,37 @@ export function ReplayScreen() {
     replayDurationSec,
     updateReplayDurationSec,
     toggleDriveLink,
-    isSavingReplay
+    isSavingReplay,
+    supportedFpsOptions,
+    supportedQualityOptions,
+    recordingPreference,
+    updateRecordingFps,
+    updateRecordingQuality
   } = useReplayController();
+
+  const openSaveTypeModal = () => {
+    setSelectedPlayType(null);
+    setSaveTypeModalOpen(true);
+  };
+
+  const confirmSaveReplay = async () => {
+    if (!selectedPlayType || isSavingReplay) return;
+    await saveReplay(selectedPlayType);
+    setSaveTypeModalOpen(false);
+    setSelectedPlayType(null);
+  };
 
   return (
     <View style={styles.root}>
-      <CameraView style={styles.preview} facing="back" mute={false} zoom={Math.max(0, Math.min(1, (selectedZoomRatio - 1) / 9))} ref={(ref) => bindRecorder(ref as never)} />
+      {cameraPermission?.granted ? (
+        <CameraView style={styles.preview} facing="back" mute={false} zoom={Math.max(0, Math.min(1, (selectedZoomRatio - 1) / 9))} ref={(ref) => bindRecorder(ref as never)} />
+      ) : (
+        <View style={styles.permissionFallback}>
+          <Text style={styles.permissionTitle}>Permissão de câmera necessária</Text>
+          <Text style={styles.permissionText}>Autorize a câmera para iniciar o preview e as gravações.</Text>
+          <PrimaryButton label="Permitir câmera" onPress={requestCameraPermission} tone="primary" />
+        </View>
+      )}
 
       <Pressable style={styles.menuButton} onPress={() => setMenuOpen(true)}>
         <Text style={styles.menuButtonText}>☰</Text>
@@ -50,7 +81,7 @@ export function ReplayScreen() {
             onPress={isRecording ? stopAndSaveSession : startRecording}
             tone={isRecording ? 'danger' : 'success'}
           />
-          <PrimaryButton label={isSavingReplay ? 'Salvando replay...' : `Salvar replay (${replayDurationSec}s)`} onPress={saveReplay} disabled={!isRecording || isSavingReplay} tone="primary" />
+          <PrimaryButton label={isSavingReplay ? 'Salvando replay...' : `Salvar replay (${replayDurationSec}s)`} onPress={openSaveTypeModal} disabled={!isRecording || isSavingReplay} tone="primary" />
         </View>
       </View>
 
@@ -80,6 +111,32 @@ export function ReplayScreen() {
             </View>
 
 
+            <Text style={styles.modalSectionTitle}>FPS</Text>
+            <View style={styles.durationWrap}>
+              {supportedFpsOptions.map((fps) => (
+                <PrimaryButton
+                  key={`fps-${fps}`}
+                  label={`${fps}`}
+                  onPress={() => updateRecordingFps(fps)}
+                  tone={recordingPreference.fps === fps ? 'success' : 'primary'}
+                  fill={false}
+                />
+              ))}
+            </View>
+
+            <Text style={styles.modalSectionTitle}>Qualidade</Text>
+            <View style={styles.durationWrap}>
+              {supportedQualityOptions.map((quality) => (
+                <PrimaryButton
+                  key={`quality-${quality}`}
+                  label={quality}
+                  onPress={() => updateRecordingQuality(quality)}
+                  tone={recordingPreference.quality === quality ? 'success' : 'primary'}
+                  fill={false}
+                />
+              ))}
+            </View>
+
             <Text style={styles.modalSectionTitle}>Duração do replay</Text>
             <View style={styles.durationWrap}>
               {[10, 15, 20, 25, 30, 35, 40].map((seconds) => (
@@ -95,6 +152,36 @@ export function ReplayScreen() {
 
             <PrimaryButton label="Fechar" onPress={() => setMenuOpen(false)} tone="danger" />
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={saveTypeModalOpen} transparent animationType="fade" onRequestClose={() => {}}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.saveTypeModalCard}>
+            <Text style={styles.modalTitle}>O que foi este lance ?</Text>
+            <View style={styles.playTypeOptionsWrap}>
+              {PLAY_TYPE_OPTIONS.map((option) => (
+                <Pressable
+                  key={option}
+                  onPress={() => setSelectedPlayType(option)}
+                  style={[
+                    styles.playTypeOption,
+                    selectedPlayType === option ? styles.playTypeOptionSelected : null
+                  ]}
+                >
+                  <Text style={styles.playTypeOptionLabel}>{option}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.saveButtonWrap}>
+              <PrimaryButton
+                label={isSavingReplay ? 'Salvando...' : 'Salvar'}
+                onPress={confirmSaveReplay}
+                disabled={!selectedPlayType || isSavingReplay}
+                tone="success"
+              />
+            </View>
           </View>
         </View>
       </Modal>
@@ -185,6 +272,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     maxHeight: '85%'
   },
+  saveTypeModalCard: {
+    backgroundColor: '#0f1b31',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 14
+  },
   modalScroll: {
     flexGrow: 0
   },
@@ -215,5 +309,47 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8
-  }
+  },
+  playTypeOptionsWrap: {
+    gap: 8
+  },
+  playTypeOption: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(149, 165, 184, 0.45)',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: 'rgba(20, 31, 48, 0.82)'
+  },
+  playTypeOptionSelected: {
+    borderColor: colors.success,
+    backgroundColor: 'rgba(34, 197, 94, 0.2)'
+  },
+  playTypeOptionLabel: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontWeight: '700'
+  },
+  saveButtonWrap: {
+    alignItems: 'flex-end'
+  },
+  permissionFallback: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    gap: 12,
+    backgroundColor: '#000'
+  },
+  permissionTitle: {
+    color: colors.textPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+    textAlign: 'center'
+  },
+  permissionText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    textAlign: 'center'
+  },
 });

@@ -37,3 +37,12 @@ export interface SavedVideoInfo {
   localUri: string;
   album: string;
 }
+
+export type ReplayPlayType = 'GOL' | 'DEFESA' | 'LANCE';
+
+export type RecordingQuality = '4K' | '1080' | '720';
+
+export interface RecordingPreference {
+  fps: 30 | 60;
+  quality: RecordingQuality;
+}

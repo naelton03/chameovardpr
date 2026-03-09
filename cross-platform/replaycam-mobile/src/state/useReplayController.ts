@@ -1,16 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 import { ReplayEngine } from '../services/replayEngine';
-import type { CameraOption, LiveConfig, ReplayStatus } from '../types/replay';
+import type { CameraOption, LiveConfig, RecordingPreference, RecordingQuality, ReplayPlayType, ReplayStatus } from '../types/replay';
 import { requestAllPermissions } from '../services/permissions';
 import { appendDiagnosticLog, diagnosticsFilePath } from '../services/logger';
 import { copyPathToClipboard, openVideoGalleryQuickAccess } from '../services/gallery';
 import { FeatureToggles } from '../config/featureToggles';
-import { getAutoUploadEnabled, getReplayDurationSec, setAutoUploadEnabled, setReplayDurationSec } from '../services/autoUploadPrefs';
+import {
+  getAutoUploadEnabled,
+  getRecordingPreference,
+  getReplayDurationSec,
+  setAutoUploadEnabled,
+  setRecordingPreference,
+  setReplayDurationSec
+} from '../services/autoUploadPrefs';
 import { isDriveLinked, linkDriveAccount, linkedDriveEmail, unlinkDriveAccount, uploadVideoToDrive } from '../services/driveUpload';
 
 interface CameraRecorder {
-  recordAsync: (options?: { maxDuration?: number; mute?: boolean }) => Promise<{ uri: string }>;
+  recordAsync: (options?: { maxDuration?: number; mute?: boolean; videoBitrate?: number }) => Promise<{ uri: string }>;
   stopRecording: () => void;
 }
 
@@ -21,6 +28,30 @@ function buildZoomRatios(maxZoomRatio: number): number[] {
   const roundedMax = Math.round(maxZoomRatio * 10) / 10;
   if (!filtered.some((v) => Math.abs(v - roundedMax) < 0.01)) filtered.push(roundedMax);
   return [...new Set(filtered)].sort((a, b) => a - b);
+}
+
+function parseResolutionHeight(resolution: string): number {
+  const parts = resolution.toLowerCase().split('x').map((value) => Number(value));
+  if (parts.length !== 2 || Number.isNaN(parts[1])) return 1080;
+  return parts[1];
+}
+
+function getSupportedQualityOptions(maxResolution: string): RecordingQuality[] {
+  const maxHeight = parseResolutionHeight(maxResolution);
+  const options: RecordingQuality[] = [];
+  if (maxHeight >= 2160) options.push('4K');
+  if (maxHeight >= 1080) options.push('1080');
+  if (maxHeight >= 720) options.push('720');
+  if (!options.length) options.push('720');
+  return options;
+}
+
+function getSupportedFpsOptions(maxFps: number): Array<30 | 60> {
+  const options: Array<30 | 60> = [];
+  if (maxFps >= 30) options.push(30);
+  if (maxFps >= 60) options.push(60);
+  if (!options.length) options.push(30);
+  return options;
 }
 
 export function useReplayController() {
@@ -42,6 +73,9 @@ export function useReplayController() {
   const [zoomRatios, setZoomRatios] = useState<number[]>([1]);
   const [selectedZoomRatio, setSelectedZoomRatio] = useState<number>(1);
   const [replayDurationSec, setReplayDurationSecState] = useState<number>(20);
+  const [supportedFpsOptions, setSupportedFpsOptions] = useState<Array<30 | 60>>([30]);
+  const [supportedQualityOptions, setSupportedQualityOptions] = useState<RecordingQuality[]>(['1080', '720']);
+  const [recordingPreference, setRecordingPreferenceState] = useState<RecordingPreference>({ fps: 30, quality: '1080' });
 
   useEffect(() => {
     engine.listRearCameras().then((cameras) => {
@@ -52,10 +86,16 @@ export function useReplayController() {
 
   useEffect(() => {
     (async () => {
-      const [enabled, email, replaySeconds] = await Promise.all([getAutoUploadEnabled(), linkedDriveEmail(), getReplayDurationSec()]);
+      const [enabled, email, replaySeconds, savedRecordingPreference] = await Promise.all([
+        getAutoUploadEnabled(),
+        linkedDriveEmail(),
+        getReplayDurationSec(),
+        getRecordingPreference()
+      ]);
       setAutoUploadEnabledState(enabled);
       setDriveEmail(email);
       setReplayDurationSecState(replaySeconds);
+      setRecordingPreferenceState(savedRecordingPreference);
     })();
   }, []);
 
@@ -70,6 +110,20 @@ export function useReplayController() {
         Math.abs(value - target) < Math.abs(best - target) ? value : best
       , levels[0]);
       return closest;
+    });
+
+    const fpsOptions = getSupportedFpsOptions(selected?.maxFps ?? 30);
+    const qualityOptions = getSupportedQualityOptions(selected?.maxResolution ?? '1920x1080');
+    setSupportedFpsOptions(fpsOptions);
+    setSupportedQualityOptions(qualityOptions);
+
+    setRecordingPreferenceState((current) => {
+      const next: RecordingPreference = {
+        fps: fpsOptions.includes(current.fps) ? current.fps : fpsOptions[0],
+        quality: qualityOptions.includes(current.quality) ? current.quality : qualityOptions[0]
+      };
+      setRecordingPreference(next).catch(() => undefined);
+      return next;
     });
   }, [cameraOptions, selectedCameraId]);
 
@@ -107,6 +161,22 @@ export function useReplayController() {
     setStatus({ message: `Status: zoom ${ratio.toFixed(1)}x` });
   };
 
+  const updateRecordingFps = async (fps: 30 | 60) => {
+    if (!supportedFpsOptions.includes(fps)) return;
+    const next = { ...recordingPreference, fps };
+    setRecordingPreferenceState(next);
+    await setRecordingPreference(next);
+    setStatus({ message: `Configuração aplicada: ${next.quality} ${next.fps}fps` });
+  };
+
+  const updateRecordingQuality = async (quality: RecordingQuality) => {
+    if (!supportedQualityOptions.includes(quality)) return;
+    const next = { ...recordingPreference, quality };
+    setRecordingPreferenceState(next);
+    await setRecordingPreference(next);
+    setStatus({ message: `Configuração aplicada: ${next.quality} ${next.fps}fps` });
+  };
+
   const startRecording = async () => {
     if (!recorderRef.current) {
       setStatus({ message: 'Preview de câmera indisponível.', isError: true });
@@ -120,16 +190,14 @@ export function useReplayController() {
       return;
     }
 
-    await engine.startContinuousRecording(selectedCameraId, recorderRef.current);
+    await engine.startContinuousRecording(selectedCameraId, recorderRef.current, recordingPreference);
     setElapsedSeconds(0);
     setIsRecording(true);
-    setStatus({ message: `Gravação contínua ativa (buffer de replay 20s). Zoom ${selectedZoomRatio.toFixed(1)}x.` });
+    setStatus({ message: `Gravação contínua ativa (${recordingPreference.quality} ${recordingPreference.fps}fps / buffer ${replayDurationSec}s). Zoom ${selectedZoomRatio.toFixed(1)}x.` });
 
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => setElapsedSeconds((cur) => cur + 1), 1000);
   };
-
-
 
   const maybeUploadVideoToDrive = async (localUri: string, displayName: string) => {
     if (!autoUploadEnabled) return;
@@ -145,14 +213,14 @@ export function useReplayController() {
     }
   };
 
-  const saveReplay = async () => {
+  const saveReplay = async (playType?: ReplayPlayType) => {
     if (savingReplayLockRef.current || isSavingReplay) return;
     savingReplayLockRef.current = true;
     setIsSavingReplay(true);
     try {
-      const saved = await engine.saveReplayWindow(replayDurationSec);
+      const saved = await engine.saveReplayWindow(replayDurationSec, playType);
       setLastOutputPath(saved.localUri);
-      setStatus({ message: `Replay salvo (${replayDurationSec}s): ${saved.fileName} (${saved.album})` });
+      setStatus({ message: `Replay salvo${playType ? ` (${playType})` : ''} (${replayDurationSec}s): ${saved.fileName} (${saved.album})` });
       await maybeUploadVideoToDrive(saved.localUri, saved.fileName);
     } catch (error) {
       setStatus({ message: `Erro ao salvar replay: ${(error as Error).message}`, isError: true });
@@ -206,14 +274,10 @@ export function useReplayController() {
     }
   };
 
-
-
   const toggleAutoUpload = async (enabled: boolean) => {
     setAutoUploadEnabledState(enabled);
     await setAutoUploadEnabled(enabled);
   };
-
-
 
   const updateReplayDurationSec = async (value: number) => {
     setReplayDurationSecState(value);
@@ -259,6 +323,11 @@ export function useReplayController() {
     zoomRatios,
     selectedZoomRatio,
     setSelectedZoomRatio: updateZoomRatio,
+    supportedFpsOptions,
+    supportedQualityOptions,
+    recordingPreference,
+    updateRecordingFps,
+    updateRecordingQuality,
     liveEnabled: FeatureToggles.isLiveEnabled
   };
 }
