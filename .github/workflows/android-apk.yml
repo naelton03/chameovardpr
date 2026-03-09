@@ -20,6 +20,8 @@ concurrency:
 jobs:
   build-android-apk:
     runs-on: ubuntu-22.04
+    env:
+      NODE_ENV: production
     defaults:
       run:
         working-directory: cross-platform/replaycam-mobile

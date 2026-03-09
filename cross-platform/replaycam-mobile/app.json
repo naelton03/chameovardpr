@@ -23,6 +23,16 @@
         "RECORD_AUDIO"
       ]
     },
-    "scheme": "replaycam"
+    "scheme": "replaycam",
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ]
   }
 }

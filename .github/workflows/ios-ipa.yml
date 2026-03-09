@@ -20,6 +20,8 @@ concurrency:
 jobs:
   build-ios-simulator-ipa:
     runs-on: macos-14
+    env:
+      NODE_ENV: production
     defaults:
       run:
         working-directory: cross-platform/replaycam-mobile
