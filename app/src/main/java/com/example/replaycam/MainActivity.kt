@@ -115,6 +115,8 @@ class MainActivity : AppCompatActivity() {
     private val prefReplayDurationSec = "replay_duration_sec"
     private val prefVideoQuality = "video_quality"
     private val prefVideoFps = "video_fps"
+    private val prefReplaySequenceDay = "replay_sequence_day"
+    private val prefReplaySequenceValue = "replay_sequence_value"
 
     private val instagramTargetWidth = 1080
     private val instagramTargetHeight = 1920
@@ -1430,9 +1432,9 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                val outputName = "replay_${replayType.lowercase()}_${stamp}.mp4"
+                val replayFileIdentity = nextReplayFileIdentity(replayType)
                 val savedUri = withContext(Dispatchers.IO) {
-                    saveVideoToPublicGallery(mergedReplay, outputName)
+                    saveVideoToPublicGallery(mergedReplay, replayFileIdentity.fileName)
                 }
                 mergedReplay.delete()
 
@@ -1442,15 +1444,16 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                status("Status: replay ${replayType.lowercase()} salvo na galeria")
-                toast("Replay $replayType salvo")
+                commitReplayFileIdentity(replayFileIdentity)
+                status("Status: replay ${replayType.lowercase()} salvo na galeria (${replayFileIdentity.baseName})")
+                toast("Replay ${replayFileIdentity.baseName} salvo")
                 inspectSavedVideoQuality(savedUri, selectedVideoFps)?.let { report ->
                     appendDiagnosticLog("Replay quality check: ${report.summary()}")
                     if (report.issues.isNotEmpty()) {
                         toast("Replay salvo com alertas de qualidade")
                     }
                 }
-                maybeUploadVideoToDrive(savedUri, outputName)
+                maybeUploadVideoToDrive(savedUri, replayFileIdentity.fileName)
             } finally {
                 binding.replayButton.isEnabled = isContinuousRecording
             }
@@ -1469,6 +1472,41 @@ class MainActivity : AppCompatActivity() {
                 ErrorFileLogger.logError(this, "ROTATE_SEGMENT_REPLAY", error)
                 appendDiagnosticLog("Falha ao rotacionar segmento para replay: ${error.message}", error)
             }
+    }
+
+    private data class ReplayFileIdentity(
+        val dayKey: String,
+        val sequence: Int,
+        val replayType: String
+    ) {
+        val baseName: String
+            get() = "${replayType}_${sequence}"
+
+        val fileName: String
+            get() = "${baseName}.mp4"
+    }
+
+    private fun nextReplayFileIdentity(replayType: String): ReplayFileIdentity {
+        val dayKey = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())
+        val savedDayKey = appPrefs.getString(prefReplaySequenceDay, null)
+        val lastSequence = if (savedDayKey == dayKey) {
+            appPrefs.getInt(prefReplaySequenceValue, 0)
+        } else {
+            0
+        }
+
+        return ReplayFileIdentity(
+            dayKey = dayKey,
+            sequence = lastSequence + 1,
+            replayType = replayType.uppercase(Locale.getDefault())
+        )
+    }
+
+    private fun commitReplayFileIdentity(identity: ReplayFileIdentity) {
+        appPrefs.edit()
+            .putString(prefReplaySequenceDay, identity.dayKey)
+            .putInt(prefReplaySequenceValue, identity.sequence)
+            .apply()
     }
 
     private fun buildReplaySliceFromLatestRecordingLocked(targetWindowUs: Long): SegmentSlice? {
