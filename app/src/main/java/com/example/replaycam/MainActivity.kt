@@ -351,6 +351,17 @@ class MainActivity : AppCompatActivity() {
                 applyZoomRatio(zoomRatio)
             }
         }
+        binding.cameraOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selectedCapability = availableCameraCapabilities.getOrNull(position) ?: return
+                if (selectedCapability.cameraId == selectedCameraCapability?.cameraId) return
+                selectedCameraCapability = selectedCapability
+                setupZoomUiForCapability(selectedCapability)
+                cameraProvider?.let { provider -> bindSelectedCamera(provider) }
+            }
+        }
         binding.openFolderButton.visibility = View.GONE
         binding.stopButton.visibility = View.GONE
         binding.videoPathText.visibility = View.GONE
@@ -843,12 +854,36 @@ class MainActivity : AppCompatActivity() {
         }
         availableCameraCapabilities = capabilities
 
-        // Oculto para UX simplificada: seleção manual de câmera não é mais exibida ao usuário.
-        binding.cameraOptionsLabel.visibility = View.GONE
-        binding.cameraOptionsSpinner.visibility = View.GONE
+        if (capabilities.size > 1) {
+            val labels = capabilities.map { it.displayLabel() }
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            binding.cameraOptionsSpinner.adapter = adapter
+            binding.cameraOptionsLabel.visibility = View.VISIBLE
+            binding.cameraOptionsSpinner.visibility = View.VISIBLE
+        } else {
+            binding.cameraOptionsLabel.visibility = View.GONE
+            binding.cameraOptionsSpinner.visibility = View.GONE
+        }
 
-        selectedCameraCapability = capabilities.firstOrNull()
+        selectedCameraCapability = preferredDefaultCameraCapability(capabilities)
+        val defaultIndex = capabilities.indexOfFirst { it.cameraId == selectedCameraCapability?.cameraId }
+            .let { if (it >= 0) it else 0 }
+        if (capabilities.isNotEmpty()) {
+            binding.cameraOptionsSpinner.setSelection(defaultIndex)
+        }
         setupZoomUiForCapability(selectedCameraCapability)
+    }
+
+    private fun preferredDefaultCameraCapability(capabilities: List<RuntimeCameraCapability>): RuntimeCameraCapability? {
+        return capabilities
+            .sortedWith(
+                compareBy<RuntimeCameraCapability> { it.minZoomRatio > 1f }
+                    .thenByDescending { it.hasLogicalMultiCamera }
+                    .thenBy { it.minZoomRatio }
+                    .thenByDescending { it.maxFps }
+            )
+            .firstOrNull()
     }
 
     private fun setupZoomUiForCapability(capability: RuntimeCameraCapability?) {
@@ -862,7 +897,7 @@ class MainActivity : AppCompatActivity() {
         val zoomLevels = buildZoomRatios(capability.minZoomRatio, capability.maxZoomRatio)
         availableZoomRatios = zoomLevels
 
-        val labels = zoomLevels.map { "${formatZoomRatio(it)}x" }
+        val labels = zoomLevels.map { zoomDisplayLabel(it) }
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.zoomOptionsSpinner.adapter = adapter
@@ -877,12 +912,29 @@ class MainActivity : AppCompatActivity() {
     private fun buildZoomRatios(minZoom: Float, maxZoom: Float): List<Float> {
         val clampedMin = minZoom.coerceAtLeast(0.5f)
         val clampedMax = maxZoom.coerceAtLeast(clampedMin)
-        val presets = listOf(0.5f, 0.7f, 1f, 1.2f, 1.5f, 2f, 3f, 4f, 5f, 8f, 10f)
-        val dynamic = presets.filter { it in clampedMin..clampedMax }.toMutableSet()
+        val presets = listOf(0.5f, 0.6f, 0.7f, 1f, 1.2f, 1.5f, 2f, 3f, 4f, 5f, 8f, 10f)
+        val dynamic = mutableSetOf<Float>()
+        presets.forEach { preset ->
+            if (preset in clampedMin..clampedMax) {
+                dynamic.add(preset)
+                return@forEach
+            }
+            if (preset < 1f && clampedMin < 1f && preset <= (clampedMin + 0.12f)) {
+                dynamic.add(clampedMin)
+            }
+        }
         dynamic.add(clampedMin)
         dynamic.add(clampedMax)
         if (1f in clampedMin..clampedMax) dynamic.add(1f)
         return dynamic.toList().sorted()
+    }
+
+    private fun zoomDisplayLabel(value: Float): String {
+        return if (value in 0.58f..0.72f) {
+            "0.6x"
+        } else {
+            "${formatZoomRatio(value)}x"
+        }
     }
 
     private fun formatZoomRatio(value: Float): String {
@@ -927,8 +979,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyZoomRatio(zoomRatio: Float) {
-        boundCamera?.cameraControl?.setZoomRatio(zoomRatio)
-        status("Status: zoom ${formatZoomRatio(zoomRatio)}x")
+        val camera = boundCamera ?: return
+        val control = camera.cameraControl
+        val zoomState = camera.cameraInfo.zoomState.value
+        val minSupportedZoom = zoomState?.minZoomRatio ?: 1f
+        val maxSupportedZoom = zoomState?.maxZoomRatio ?: 10f
+        val safeZoom = zoomRatio.coerceIn(minSupportedZoom, maxSupportedZoom)
+
+        if (kotlin.math.abs(safeZoom - zoomRatio) > 0.01f) {
+            appendDiagnosticLog(
+                "Zoom solicitado ${"%.2f".format(Locale.US, zoomRatio)}x fora da faixa suportada " +
+                    "${"%.2f".format(Locale.US, minSupportedZoom)}x-" +
+                    "${"%.2f".format(Locale.US, maxSupportedZoom)}x. Aplicando ${"%.2f".format(Locale.US, safeZoom)}x."
+            )
+        }
+
+        control.setZoomRatio(safeZoom)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val shouldApplyCamera2Zoom = safeZoom >= minSupportedZoom && safeZoom <= maxSupportedZoom
+            runCatching {
+                if (shouldApplyCamera2Zoom) {
+                    Camera2CameraControl.from(control)
+                        .setCaptureRequestOptions(
+                            CaptureRequestOptions.Builder()
+                                .setCaptureRequestOption(CaptureRequest.CONTROL_ZOOM_RATIO, safeZoom)
+                                .build()
+                        )
+                }
+            }
+        }
+        status("Status: zoom ${zoomDisplayLabel(safeZoom)}")
     }
 
     private fun targetVideoBitrateForFps(fps: Int): Int {
@@ -1017,7 +1097,7 @@ class MainActivity : AppCompatActivity() {
         for (cameraId in cameraManager.cameraIdList) {
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
-            if (lensFacing != CameraCharacteristics.LENS_FACING_BACK) continue
+            if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) continue
 
             val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
             val hasLogicalMulti = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
@@ -1027,18 +1107,26 @@ class MainActivity : AppCompatActivity() {
             } else {
                 null
             }
-            val minZoomRatio: Float
+            var minZoomRatio: Float
             val maxZoomRatio: Float
-            val zoomText = if (zoomRange != null) {
+            if (zoomRange != null) {
                 minZoomRatio = zoomRange.lower
                 maxZoomRatio = zoomRange.upper
-                "zoom %.1fx-%.1fx".format(Locale.US, minZoomRatio, maxZoomRatio)
             } else {
                 val maxDigitalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
                 minZoomRatio = 1f
                 maxZoomRatio = maxDigitalZoom
-                "zoom 1.0x-%.1fx".format(Locale.US, maxDigitalZoom)
             }
+
+            val inferredUltraWideMinZoom = inferUltraWideMinZoom(cameraManager, cameraId, characteristics)
+            if (inferredUltraWideMinZoom != null && inferredUltraWideMinZoom < minZoomRatio) {
+                minZoomRatio = inferredUltraWideMinZoom
+            }
+            if (minZoomRatio >= 1f && shouldForceUltraWidePreset()) {
+                minZoomRatio = 0.6f
+                appendDiagnosticLog("Aplicando fallback de zoom 0.6x para dispositivo ${Build.MANUFACTURER} ${Build.MODEL}")
+            }
+            val normalizedZoomText = "zoom %.1fx-%.1fx".format(Locale.US, minZoomRatio, maxZoomRatio)
 
             val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?.toList()
@@ -1056,9 +1144,9 @@ class MainActivity : AppCompatActivity() {
             val supportsFhd = recorderSizes.any { it.width >= 1920 && it.height >= 1080 }
             val supportsHd = recorderSizes.any { it.width >= 1280 && it.height >= 720 }
 
-            val lensLabel = when (characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()) {
-                null -> "Cam $cameraId"
-                else -> "Cam $cameraId"
+            val lensLabel = when (lensFacing) {
+                CameraCharacteristics.LENS_FACING_BACK -> "Cam $cameraId"
+                else -> "Aux $cameraId"
             }
 
             result.add(
@@ -1068,7 +1156,7 @@ class MainActivity : AppCompatActivity() {
                     hasLogicalMultiCamera = hasLogicalMulti,
                     minZoomRatio = minZoomRatio,
                     maxZoomRatio = maxZoomRatio,
-                    zoomRangeText = zoomText,
+                    zoomRangeText = normalizedZoomText,
                     maxFps = maxFps,
                     maxResolution = previewMaxResolution,
                     fpsRanges = fpsRanges,
@@ -1080,6 +1168,45 @@ class MainActivity : AppCompatActivity() {
         }
 
         return result.sortedBy { it.cameraId }
+    }
+
+    private fun inferUltraWideMinZoom(
+        cameraManager: CameraManager,
+        logicalCameraId: String,
+        logicalCharacteristics: CameraCharacteristics
+    ): Float? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+        val physicalIds = logicalCharacteristics.physicalCameraIds
+        if (physicalIds.isEmpty()) return null
+
+        val logicalReferenceFocal = logicalCharacteristics
+            .get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.firstOrNull()
+            ?.takeIf { it > 0f }
+
+        val physicalFocals = physicalIds.mapNotNull { physicalId ->
+            runCatching {
+                cameraManager.getCameraCharacteristics(physicalId)
+                    .get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    ?.firstOrNull()
+                    ?.takeIf { it > 0f }
+            }.getOrNull()
+        }
+        if (physicalFocals.isEmpty()) return null
+
+        val minPhysicalFocal = physicalFocals.minOrNull() ?: return null
+        val referenceFocal = logicalReferenceFocal ?: physicalFocals.maxOrNull() ?: return null
+        if (referenceFocal <= 0f) return null
+
+        val inferredMinZoom = (minPhysicalFocal / referenceFocal).coerceIn(0.5f, 1f)
+        appendDiagnosticLog("Inferência zoom ultra-wide para câmera $logicalCameraId: min=${"%.2f".format(Locale.US, inferredMinZoom)} (focais físicas=${physicalFocals.joinToString()})")
+        return inferredMinZoom
+    }
+
+    private fun shouldForceUltraWidePreset(): Boolean {
+        val manufacturer = Build.MANUFACTURER.lowercase(Locale.US)
+        val model = Build.MODEL.lowercase(Locale.US)
+        return manufacturer.contains("xiaomi") || manufacturer.contains("poco") || model.contains("poco x4 pro")
     }
 
     private fun bindSelectedCamera(provider: ProcessCameraProvider) {
@@ -1139,7 +1266,7 @@ class MainActivity : AppCompatActivity() {
             if (currentCapability != null) {
                 val currentZoom = availableZoomRatios.getOrNull(binding.zoomOptionsSpinner.selectedItemPosition) ?: 1f
                 val targetZoom = currentZoom.coerceIn(currentCapability.minZoomRatio, currentCapability.maxZoomRatio)
-                boundCamera?.cameraControl?.setZoomRatio(targetZoom)
+                applyZoomRatio(targetZoom)
             }
 
             val fpsOptions = supportedFpsOptions(currentCapability)

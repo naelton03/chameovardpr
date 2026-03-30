@@ -74,9 +74,31 @@ jobs:
 
       - name: Build iOS app for Simulator (unsigned)
         run: |
+          WORKSPACE_PATH="$(find ios -maxdepth 1 -name '*.xcworkspace' | head -n 1)"
+          PROJECT_PATH="$(find ios -maxdepth 1 -name '*.xcodeproj' | head -n 1)"
+
+          if [[ -n "${WORKSPACE_PATH}" ]]; then
+            CONTAINER_FLAG="-workspace"
+            CONTAINER_PATH="${WORKSPACE_PATH}"
+          elif [[ -n "${PROJECT_PATH}" ]]; then
+            CONTAINER_FLAG="-project"
+            CONTAINER_PATH="${PROJECT_PATH}"
+          else
+            echo "Nenhum .xcworkspace ou .xcodeproj encontrado em cross-platform/replaycam-mobile/ios"
+            ls -la ios || true
+            exit 1
+          fi
+
+          SCHEME_NAME="$(xcodebuild ${CONTAINER_FLAG} "${CONTAINER_PATH}" -list -json | ruby -rjson -e 'json = JSON.parse(STDIN.read); puts((json["workspace"] || json["project"])["schemes"].first)')"
+          if [[ -z "${SCHEME_NAME}" ]]; then
+            echo "Não foi possível detectar um scheme para ${CONTAINER_PATH}"
+            xcodebuild ${CONTAINER_FLAG} "${CONTAINER_PATH}" -list
+            exit 1
+          fi
+
           xcodebuild \
-            -workspace ios/ReplayCam.xcworkspace \
-            -scheme ReplayCam \
+            ${CONTAINER_FLAG} "${CONTAINER_PATH}" \
+            -scheme "${SCHEME_NAME}" \
             -configuration Debug \
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
@@ -92,7 +114,12 @@ jobs:
             SAFE_REF="$(echo "${{ github.ref_name }}" | sed 's#[^A-Za-z0-9._-]#-#g')"
             VERSION_TAG="${SAFE_REF}-run-${{ github.run_number }}"
           fi
-          APP_SRC="build/ios-derived/Build/Products/Debug-iphonesimulator/ReplayCam.app"
+          APP_SRC="$(find build/ios-derived/Build/Products/Debug-iphonesimulator -maxdepth 1 -name '*.app' | head -n 1)"
+          if [[ -z "${APP_SRC}" ]]; then
+            echo "Nenhum .app encontrado em build/ios-derived/Build/Products/Debug-iphonesimulator"
+            find build/ios-derived/Build/Products -maxdepth 3 -type f | head -n 50 || true
+            exit 1
+          fi
           APP_ZIP="dist/replaycam-ios-simulator-${VERSION_TAG}.zip"
           ditto -c -k --sequesterRsrc --keepParent "${APP_SRC}" "${APP_ZIP}"
           shasum -a 256 "${APP_ZIP}" > "${APP_ZIP}.sha256"
