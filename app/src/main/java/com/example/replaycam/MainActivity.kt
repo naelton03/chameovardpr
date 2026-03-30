@@ -1090,7 +1090,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 null
             }
-            val minZoomRatio: Float
+            var minZoomRatio: Float
             val maxZoomRatio: Float
             if (zoomRange != null) {
                 minZoomRatio = zoomRange.lower
