@@ -979,19 +979,36 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyZoomRatio(zoomRatio: Float) {
-        val control = boundCamera?.cameraControl ?: return
-        control.setZoomRatio(zoomRatio)
+        val camera = boundCamera ?: return
+        val control = camera.cameraControl
+        val zoomState = camera.cameraInfo.zoomState.value
+        val minSupportedZoom = zoomState?.minZoomRatio ?: 1f
+        val maxSupportedZoom = zoomState?.maxZoomRatio ?: 10f
+        val safeZoom = zoomRatio.coerceIn(minSupportedZoom, maxSupportedZoom)
+
+        if (kotlin.math.abs(safeZoom - zoomRatio) > 0.01f) {
+            appendDiagnosticLog(
+                "Zoom solicitado ${"%.2f".format(Locale.US, zoomRatio)}x fora da faixa suportada " +
+                    "${"%.2f".format(Locale.US, minSupportedZoom)}x-" +
+                    "${"%.2f".format(Locale.US, maxSupportedZoom)}x. Aplicando ${"%.2f".format(Locale.US, safeZoom)}x."
+            )
+        }
+
+        control.setZoomRatio(safeZoom)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val shouldApplyCamera2Zoom = safeZoom >= minSupportedZoom && safeZoom <= maxSupportedZoom
             runCatching {
-                Camera2CameraControl.from(control)
-                    .setCaptureRequestOptions(
-                        CaptureRequestOptions.Builder()
-                            .setCaptureRequestOption(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio)
-                            .build()
-                    )
+                if (shouldApplyCamera2Zoom) {
+                    Camera2CameraControl.from(control)
+                        .setCaptureRequestOptions(
+                            CaptureRequestOptions.Builder()
+                                .setCaptureRequestOption(CaptureRequest.CONTROL_ZOOM_RATIO, safeZoom)
+                                .build()
+                        )
+                }
             }
         }
-        status("Status: zoom ${zoomDisplayLabel(zoomRatio)}")
+        status("Status: zoom ${zoomDisplayLabel(safeZoom)}")
     }
 
     private fun targetVideoBitrateForFps(fps: Int): Int {
