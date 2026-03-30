@@ -1080,7 +1080,7 @@ class MainActivity : AppCompatActivity() {
         for (cameraId in cameraManager.cameraIdList) {
             val characteristics = cameraManager.getCameraCharacteristics(cameraId)
             val lensFacing = characteristics.get(CameraCharacteristics.LENS_FACING)
-            if (lensFacing != CameraCharacteristics.LENS_FACING_BACK) continue
+            if (lensFacing == CameraCharacteristics.LENS_FACING_FRONT) continue
 
             val capabilities = characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
             val hasLogicalMulti = capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
@@ -1105,6 +1105,10 @@ class MainActivity : AppCompatActivity() {
             if (inferredUltraWideMinZoom != null && inferredUltraWideMinZoom < minZoomRatio) {
                 minZoomRatio = inferredUltraWideMinZoom
             }
+            if (minZoomRatio >= 1f && shouldForceUltraWidePreset()) {
+                minZoomRatio = 0.6f
+                appendDiagnosticLog("Aplicando fallback de zoom 0.6x para dispositivo ${Build.MANUFACTURER} ${Build.MODEL}")
+            }
             val normalizedZoomText = "zoom %.1fx-%.1fx".format(Locale.US, minZoomRatio, maxZoomRatio)
 
             val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
@@ -1123,9 +1127,9 @@ class MainActivity : AppCompatActivity() {
             val supportsFhd = recorderSizes.any { it.width >= 1920 && it.height >= 1080 }
             val supportsHd = recorderSizes.any { it.width >= 1280 && it.height >= 720 }
 
-            val lensLabel = when (characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()) {
-                null -> "Cam $cameraId"
-                else -> "Cam $cameraId"
+            val lensLabel = when (lensFacing) {
+                CameraCharacteristics.LENS_FACING_BACK -> "Cam $cameraId"
+                else -> "Aux $cameraId"
             }
 
             result.add(
@@ -1180,6 +1184,12 @@ class MainActivity : AppCompatActivity() {
         val inferredMinZoom = (minPhysicalFocal / referenceFocal).coerceIn(0.5f, 1f)
         appendDiagnosticLog("Inferência zoom ultra-wide para câmera $logicalCameraId: min=${"%.2f".format(Locale.US, inferredMinZoom)} (focais físicas=${physicalFocals.joinToString()})")
         return inferredMinZoom
+    }
+
+    private fun shouldForceUltraWidePreset(): Boolean {
+        val manufacturer = Build.MANUFACTURER.lowercase(Locale.US)
+        val model = Build.MODEL.lowercase(Locale.US)
+        return manufacturer.contains("xiaomi") || manufacturer.contains("poco") || model.contains("poco x4 pro")
     }
 
     private fun bindSelectedCamera(provider: ProcessCameraProvider) {
