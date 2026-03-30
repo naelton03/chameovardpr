@@ -979,8 +979,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun applyZoomRatio(zoomRatio: Float) {
-        boundCamera?.cameraControl?.setZoomRatio(zoomRatio)
-        status("Status: zoom ${formatZoomRatio(zoomRatio)}x")
+        val control = boundCamera?.cameraControl ?: return
+        control.setZoomRatio(zoomRatio)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching {
+                Camera2CameraControl.from(control)
+                    .setCaptureRequestOptions(
+                        CaptureRequestOptions.Builder()
+                            .setCaptureRequestOption(CaptureRequest.CONTROL_ZOOM_RATIO, zoomRatio)
+                            .build()
+                    )
+            }
+        }
+        status("Status: zoom ${zoomDisplayLabel(zoomRatio)}")
     }
 
     private fun targetVideoBitrateForFps(fps: Int): Int {
@@ -1081,16 +1092,20 @@ class MainActivity : AppCompatActivity() {
             }
             val minZoomRatio: Float
             val maxZoomRatio: Float
-            val zoomText = if (zoomRange != null) {
+            if (zoomRange != null) {
                 minZoomRatio = zoomRange.lower
                 maxZoomRatio = zoomRange.upper
-                "zoom %.1fx-%.1fx".format(Locale.US, minZoomRatio, maxZoomRatio)
             } else {
                 val maxDigitalZoom = characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
                 minZoomRatio = 1f
                 maxZoomRatio = maxDigitalZoom
-                "zoom 1.0x-%.1fx".format(Locale.US, maxDigitalZoom)
             }
+
+            val inferredUltraWideMinZoom = inferUltraWideMinZoom(cameraManager, cameraId, characteristics)
+            if (inferredUltraWideMinZoom != null && inferredUltraWideMinZoom < minZoomRatio) {
+                minZoomRatio = inferredUltraWideMinZoom
+            }
+            val normalizedZoomText = "zoom %.1fx-%.1fx".format(Locale.US, minZoomRatio, maxZoomRatio)
 
             val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 ?.toList()
@@ -1120,7 +1135,7 @@ class MainActivity : AppCompatActivity() {
                     hasLogicalMultiCamera = hasLogicalMulti,
                     minZoomRatio = minZoomRatio,
                     maxZoomRatio = maxZoomRatio,
-                    zoomRangeText = zoomText,
+                    zoomRangeText = normalizedZoomText,
                     maxFps = maxFps,
                     maxResolution = previewMaxResolution,
                     fpsRanges = fpsRanges,
@@ -1132,6 +1147,39 @@ class MainActivity : AppCompatActivity() {
         }
 
         return result.sortedBy { it.cameraId }
+    }
+
+    private fun inferUltraWideMinZoom(
+        cameraManager: CameraManager,
+        logicalCameraId: String,
+        logicalCharacteristics: CameraCharacteristics
+    ): Float? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+        val physicalIds = logicalCharacteristics.physicalCameraIds
+        if (physicalIds.isEmpty()) return null
+
+        val logicalReferenceFocal = logicalCharacteristics
+            .get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+            ?.firstOrNull()
+            ?.takeIf { it > 0f }
+
+        val physicalFocals = physicalIds.mapNotNull { physicalId ->
+            runCatching {
+                cameraManager.getCameraCharacteristics(physicalId)
+                    .get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)
+                    ?.firstOrNull()
+                    ?.takeIf { it > 0f }
+            }.getOrNull()
+        }
+        if (physicalFocals.isEmpty()) return null
+
+        val minPhysicalFocal = physicalFocals.minOrNull() ?: return null
+        val referenceFocal = logicalReferenceFocal ?: physicalFocals.maxOrNull() ?: return null
+        if (referenceFocal <= 0f) return null
+
+        val inferredMinZoom = (minPhysicalFocal / referenceFocal).coerceIn(0.5f, 1f)
+        appendDiagnosticLog("Inferência zoom ultra-wide para câmera $logicalCameraId: min=${"%.2f".format(Locale.US, inferredMinZoom)} (focais físicas=${physicalFocals.joinToString()})")
+        return inferredMinZoom
     }
 
     private fun bindSelectedCamera(provider: ProcessCameraProvider) {
@@ -1191,7 +1239,7 @@ class MainActivity : AppCompatActivity() {
             if (currentCapability != null) {
                 val currentZoom = availableZoomRatios.getOrNull(binding.zoomOptionsSpinner.selectedItemPosition) ?: 1f
                 val targetZoom = currentZoom.coerceIn(currentCapability.minZoomRatio, currentCapability.maxZoomRatio)
-                boundCamera?.cameraControl?.setZoomRatio(targetZoom)
+                applyZoomRatio(targetZoom)
             }
 
             val fpsOptions = supportedFpsOptions(currentCapability)
