@@ -351,6 +351,17 @@ class MainActivity : AppCompatActivity() {
                 applyZoomRatio(zoomRatio)
             }
         }
+        binding.cameraOptionsSpinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+
+            override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val selectedCapability = availableCameraCapabilities.getOrNull(position) ?: return
+                if (selectedCapability.cameraId == selectedCameraCapability?.cameraId) return
+                selectedCameraCapability = selectedCapability
+                setupZoomUiForCapability(selectedCapability)
+                cameraProvider?.let { provider -> bindSelectedCamera(provider) }
+            }
+        }
         binding.openFolderButton.visibility = View.GONE
         binding.stopButton.visibility = View.GONE
         binding.videoPathText.visibility = View.GONE
@@ -843,12 +854,36 @@ class MainActivity : AppCompatActivity() {
         }
         availableCameraCapabilities = capabilities
 
-        // Oculto para UX simplificada: seleção manual de câmera não é mais exibida ao usuário.
-        binding.cameraOptionsLabel.visibility = View.GONE
-        binding.cameraOptionsSpinner.visibility = View.GONE
+        if (capabilities.size > 1) {
+            val labels = capabilities.map { it.displayLabel() }
+            val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
+            adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+            binding.cameraOptionsSpinner.adapter = adapter
+            binding.cameraOptionsLabel.visibility = View.VISIBLE
+            binding.cameraOptionsSpinner.visibility = View.VISIBLE
+        } else {
+            binding.cameraOptionsLabel.visibility = View.GONE
+            binding.cameraOptionsSpinner.visibility = View.GONE
+        }
 
-        selectedCameraCapability = capabilities.firstOrNull()
+        selectedCameraCapability = preferredDefaultCameraCapability(capabilities)
+        val defaultIndex = capabilities.indexOfFirst { it.cameraId == selectedCameraCapability?.cameraId }
+            .let { if (it >= 0) it else 0 }
+        if (capabilities.isNotEmpty()) {
+            binding.cameraOptionsSpinner.setSelection(defaultIndex)
+        }
         setupZoomUiForCapability(selectedCameraCapability)
+    }
+
+    private fun preferredDefaultCameraCapability(capabilities: List<RuntimeCameraCapability>): RuntimeCameraCapability? {
+        return capabilities
+            .sortedWith(
+                compareBy<RuntimeCameraCapability> { it.minZoomRatio > 1f }
+                    .thenByDescending { it.hasLogicalMultiCamera }
+                    .thenBy { it.minZoomRatio }
+                    .thenByDescending { it.maxFps }
+            )
+            .firstOrNull()
     }
 
     private fun setupZoomUiForCapability(capability: RuntimeCameraCapability?) {
