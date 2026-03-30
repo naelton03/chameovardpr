@@ -897,7 +897,7 @@ class MainActivity : AppCompatActivity() {
         val zoomLevels = buildZoomRatios(capability.minZoomRatio, capability.maxZoomRatio)
         availableZoomRatios = zoomLevels
 
-        val labels = zoomLevels.map { "${formatZoomRatio(it)}x" }
+        val labels = zoomLevels.map { zoomDisplayLabel(it) }
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, labels)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.zoomOptionsSpinner.adapter = adapter
@@ -912,12 +912,29 @@ class MainActivity : AppCompatActivity() {
     private fun buildZoomRatios(minZoom: Float, maxZoom: Float): List<Float> {
         val clampedMin = minZoom.coerceAtLeast(0.5f)
         val clampedMax = maxZoom.coerceAtLeast(clampedMin)
-        val presets = listOf(0.5f, 0.7f, 1f, 1.2f, 1.5f, 2f, 3f, 4f, 5f, 8f, 10f)
-        val dynamic = presets.filter { it in clampedMin..clampedMax }.toMutableSet()
+        val presets = listOf(0.5f, 0.6f, 0.7f, 1f, 1.2f, 1.5f, 2f, 3f, 4f, 5f, 8f, 10f)
+        val dynamic = mutableSetOf<Float>()
+        presets.forEach { preset ->
+            if (preset in clampedMin..clampedMax) {
+                dynamic.add(preset)
+                return@forEach
+            }
+            if (preset < 1f && clampedMin < 1f && preset <= (clampedMin + 0.12f)) {
+                dynamic.add(clampedMin)
+            }
+        }
         dynamic.add(clampedMin)
         dynamic.add(clampedMax)
         if (1f in clampedMin..clampedMax) dynamic.add(1f)
         return dynamic.toList().sorted()
+    }
+
+    private fun zoomDisplayLabel(value: Float): String {
+        return if (value in 0.58f..0.72f) {
+            "0.6x"
+        } else {
+            "${formatZoomRatio(value)}x"
+        }
     }
 
     private fun formatZoomRatio(value: Float): String {
