@@ -6,4 +6,7 @@
     <item
         android:id="@+id/menu_config_replay_duration"
         android:title="@string/menu_config_replay_duration" />
+    <item
+        android:id="@+id/menu_config_quality"
+        android:title="@string/menu_config_quality" />
 </menu>

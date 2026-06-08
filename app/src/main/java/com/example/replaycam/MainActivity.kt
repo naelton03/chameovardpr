@@ -11,9 +11,12 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.media.MediaCodec
 import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -33,7 +36,9 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.Camera2CameraInfo
+import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
@@ -92,7 +97,11 @@ class MainActivity : AppCompatActivity() {
         val maxZoomRatio: Float,
         val zoomRangeText: String,
         val maxFps: Int,
-        val maxResolution: String
+        val maxResolution: String,
+        val fpsRanges: List<Range<Int>>,
+        val supportsUhd: Boolean,
+        val supportsFhd: Boolean,
+        val supportsHd: Boolean
     ) {
         fun displayLabel(): String {
             val multi = if (hasLogicalMultiCamera) "multi" else "single"
@@ -104,6 +113,15 @@ class MainActivity : AppCompatActivity() {
     private val prefsName = "replaycam_prefs"
     private val prefAutoUpload = "auto_upload_enabled"
     private val prefReplayDurationSec = "replay_duration_sec"
+    private val prefVideoQuality = "video_quality"
+    private val prefVideoFps = "video_fps"
+
+    private val instagramTargetWidth = 1080
+    private val instagramTargetHeight = 1920
+    private val instagramBitrateMin = 10_000_000
+    private val instagramBitrateMax = 15_000_000
+    private val instagramAudioBitrate = 128_000
+    private val instagramAudioSampleRate = 44_100
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
@@ -117,7 +135,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var appPrefs: android.content.SharedPreferences
     private var autoUploadEnabled = false
     private val replayDurationOptionsSec = intArrayOf(10, 15, 20, 25, 30, 35, 40)
+    private val replayTypeOptions = arrayOf("GOL", "DEFESA", "LANCE")
     private var replayDurationSec = 20
+    private var selectedVideoQuality = "1080"
+    private var selectedVideoFps = 30
     private var activeLiveSession: LiveSessionInfo? = null
     private var transitionToLiveJob: Job? = null
     private var transitionRequestedAfterMediaFlow = false
@@ -302,6 +323,8 @@ class MainActivity : AppCompatActivity() {
         replayDurationSec = appPrefs.getInt(prefReplayDurationSec, 20).let { configured ->
             if (replayDurationOptionsSec.contains(configured)) configured else 20
         }
+        selectedVideoQuality = appPrefs.getString(prefVideoQuality, "1080") ?: "1080"
+        selectedVideoFps = appPrefs.getInt(prefVideoFps, 30).let { configured -> if (configured == 60) 60 else 30 }
         driveUploadManager = DriveUploadManager(this)
         if (FeatureToggles.isLiveEnabled) {
             youtubeLiveHandler = YouTubeLiveHandler(this)
@@ -314,7 +337,7 @@ class MainActivity : AppCompatActivity() {
                 if (isContinuousRecording) stopContinuousRecording() else startContinuousRecording(resetBuffer = true)
             }
         }
-        binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { saveReplayBundle() } }
+        binding.replayButton.setOnClickListener { runUiAction("BTN_SAVE_REPLAY") { showReplayTypeDialog() } }
         updateReplayButtonLabel()
         binding.toggleLiveButton.setOnClickListener { runUiAction("BTN_TOGGLE_LIVE") { handleLiveToggleClick() } }
         binding.menuButton.setOnClickListener { showMainMenu(it) }
@@ -356,6 +379,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 R.id.menu_config_replay_duration -> {
                     showReplayDurationDialog()
+                    true
+                }
+                R.id.menu_config_quality -> {
+                    showQualityConfigDialog()
                     true
                 }
                 else -> false
@@ -415,6 +442,82 @@ class MainActivity : AppCompatActivity() {
                 updateReplayButtonLabel()
                 toast(getString(R.string.replay_duration_updated, replayDurationSec))
                 dialog.dismiss()
+            }
+            .setNegativeButton(R.string.close, null)
+            .show()
+    }
+
+    private fun showQualityConfigDialog() {
+        val capability = selectedCameraCapability
+        val availableQualities = supportedQualityOptions(capability)
+        val availableFps = supportedFpsOptions(capability)
+
+        var selectedQualityIdx = availableQualities.indexOf(selectedVideoQuality).let { if (it >= 0) it else 0 }
+        var selectedFpsIdx = availableFps.indexOf(selectedVideoFps).let { if (it >= 0) it else 0 }
+
+        val qualityLabels = availableQualities.map { qualityOptionLabel(it) }.toTypedArray()
+        val fpsLabels = availableFps.map { "$it FPS" }.toTypedArray()
+
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 0)
+        }
+
+        val qualityTitle = android.widget.TextView(this).apply {
+            text = getString(R.string.quality_resolution_title)
+            setTextAppearance(android.R.style.TextAppearance_Medium)
+        }
+        container.addView(qualityTitle)
+
+        val qualityGroup = android.widget.RadioGroup(this).apply {
+            orientation = android.widget.RadioGroup.VERTICAL
+        }
+        qualityLabels.forEachIndexed { index, label ->
+            qualityGroup.addView(android.widget.RadioButton(this).apply {
+                id = index
+                text = label
+                isChecked = index == selectedQualityIdx
+            })
+        }
+        qualityGroup.setOnCheckedChangeListener { _, checkedId ->
+            if (checkedId >= 0) selectedQualityIdx = checkedId
+        }
+        container.addView(qualityGroup)
+
+        val fpsTitle = android.widget.TextView(this).apply {
+            text = getString(R.string.quality_fps_title)
+            setTextAppearance(android.R.style.TextAppearance_Medium)
+        }
+        container.addView(fpsTitle)
+
+        val fpsGroup = android.widget.RadioGroup(this).apply {
+            orientation = android.widget.RadioGroup.VERTICAL
+        }
+        fpsLabels.forEachIndexed { index, label ->
+            fpsGroup.addView(android.widget.RadioButton(this).apply {
+                id = index + 100
+                text = label
+                isChecked = index == selectedFpsIdx
+            })
+        }
+        fpsGroup.setOnCheckedChangeListener { _, checkedId ->
+            if (checkedId >= 100) selectedFpsIdx = checkedId - 100
+        }
+        container.addView(fpsGroup)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.menu_config_quality)
+            .setView(container)
+            .setPositiveButton(R.string.save) { _, _ ->
+                selectedVideoQuality = availableQualities[selectedQualityIdx]
+                selectedVideoFps = availableFps[selectedFpsIdx]
+                appPrefs.edit()
+                    .putString(prefVideoQuality, selectedVideoQuality)
+                    .putInt(prefVideoFps, selectedVideoFps)
+                    .apply()
+
+                cameraProvider?.let { provider -> bindSelectedCamera(provider) }
+                toast(getString(R.string.quality_updated, qualityOptionLabel(selectedVideoQuality), selectedVideoFps))
             }
             .setNegativeButton(R.string.close, null)
             .show()
@@ -788,9 +891,121 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun qualityOptionLabel(value: String): String {
+        return when (value) {
+            "4K" -> "4K"
+            "1080" -> "1080p"
+            "720" -> "720p"
+            else -> "Auto"
+        }
+    }
+
+    private fun qualityToCameraX(value: String): Quality {
+        return when (value) {
+            "4K" -> Quality.UHD
+            "1080" -> Quality.FHD
+            "720" -> Quality.HD
+            else -> Quality.UHD
+        }
+    }
+
+    private fun supportedQualityOptions(capability: RuntimeCameraCapability?): List<String> {
+        if (capability == null) return listOf("1080")
+        return if (capability.supportsFhd) listOf("1080") else listOf("720")
+    }
+
+    private fun supportedFpsOptions(capability: RuntimeCameraCapability?): List<Int> {
+        if (capability == null) return listOf(30)
+        val options = mutableListOf<Int>()
+        if (capability.fpsRanges.any { it.upper >= 30 }) options.add(30)
+        if (capability.fpsRanges.any { it.upper >= 60 }) options.add(60)
+        if (options.isEmpty()) options.add(30)
+        return options
+    }
+
     private fun applyZoomRatio(zoomRatio: Float) {
         boundCamera?.cameraControl?.setZoomRatio(zoomRatio)
         status("Status: zoom ${formatZoomRatio(zoomRatio)}x")
+    }
+
+    private fun targetVideoBitrateForFps(fps: Int): Int {
+        val proposed = if (fps >= 60) 14_000_000 else 12_000_000
+        return proposed.coerceIn(instagramBitrateMin, instagramBitrateMax)
+    }
+
+    data class SavedVideoQualityReport(
+        val videoCodec: String,
+        val videoWidth: Int,
+        val videoHeight: Int,
+        val videoFps: Int,
+        val videoBitrate: Int,
+        val audioCodec: String,
+        val audioBitrate: Int,
+        val audioSampleRate: Int,
+        val issues: List<String>
+    ) {
+        fun summary(): String {
+            val base = "video=$videoCodec ${videoWidth}x${videoHeight} ${videoFps}fps ${videoBitrate / 1_000_000.0}Mbps | audio=$audioCodec ${audioSampleRate}Hz ${audioBitrate / 1_000.0}kbps"
+            return if (issues.isEmpty()) "$base | OK" else "$base | ajustes: ${issues.joinToString("; ")}"
+        }
+    }
+
+    private fun inspectSavedVideoQuality(savedUri: Uri, expectedFps: Int): SavedVideoQualityReport? {
+        return runCatching {
+            val extractor = MediaExtractor()
+            extractor.setDataSource(this, savedUri, null)
+            var videoCodec = "n/a"
+            var width = 0
+            var height = 0
+            var fps = 0
+            var bitrate = 0
+            var audioCodec = "n/a"
+            var audioBitrate = 0
+            var audioSampleRate = 0
+
+            for (i in 0 until extractor.trackCount) {
+                val format = extractor.getTrackFormat(i)
+                val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
+                if (mime.startsWith("video/")) {
+                    videoCodec = mime
+                    width = format.getInteger(MediaFormat.KEY_WIDTH)
+                    height = format.getInteger(MediaFormat.KEY_HEIGHT)
+                    fps = if (format.containsKey(MediaFormat.KEY_FRAME_RATE)) format.getInteger(MediaFormat.KEY_FRAME_RATE) else 0
+                    bitrate = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 0
+                } else if (mime.startsWith("audio/")) {
+                    audioCodec = mime
+                    audioBitrate = if (format.containsKey(MediaFormat.KEY_BIT_RATE)) format.getInteger(MediaFormat.KEY_BIT_RATE) else 0
+                    audioSampleRate = if (format.containsKey(MediaFormat.KEY_SAMPLE_RATE)) format.getInteger(MediaFormat.KEY_SAMPLE_RATE) else 0
+                }
+            }
+            extractor.release()
+
+            val issues = mutableListOf<String>()
+            if (!videoCodec.contains("avc")) issues.add("codec de vídeo fora do H.264/AVC")
+            if (!((width == instagramTargetWidth && height == instagramTargetHeight) || (width == instagramTargetHeight && height == instagramTargetWidth))) {
+                issues.add("resolução fora de 1080x1920")
+            }
+            if (fps > 0 && kotlin.math.abs(fps - expectedFps) > 2) issues.add("FPS diferente do alvo $expectedFps")
+            if (bitrate > 0 && bitrate !in instagramBitrateMin..instagramBitrateMax) issues.add("bitrate fora de 10-15Mbps")
+            if (!audioCodec.contains("mp4a") && !audioCodec.contains("aac")) issues.add("codec de áudio fora de AAC")
+            if (audioBitrate > 0 && audioBitrate !in 128_000..192_000) issues.add("bitrate de áudio fora de 128-192kbps")
+            if (audioSampleRate > 0 && audioSampleRate != instagramAudioSampleRate) issues.add("sample rate diferente de 44.1kHz")
+
+            SavedVideoQualityReport(
+                videoCodec = videoCodec,
+                videoWidth = width,
+                videoHeight = height,
+                videoFps = fps,
+                videoBitrate = bitrate,
+                audioCodec = audioCodec,
+                audioBitrate = audioBitrate,
+                audioSampleRate = audioSampleRate,
+                issues = issues
+            )
+        }.onFailure { error ->
+            appendDiagnosticLog("Falha na inspeção de qualidade do vídeo: ${error.message}", error)
+        }.getOrNull()
     }
 
     private fun detectCameraCapabilities(): List<RuntimeCameraCapability> {
@@ -823,14 +1038,21 @@ class MainActivity : AppCompatActivity() {
                 "zoom 1.0x-%.1fx".format(Locale.US, maxDigitalZoom)
             }
 
-            val maxFps = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-                ?.maxOfOrNull { range: Range<Int> -> range.upper } ?: 30
+            val fpsRanges = characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                ?.toList()
+                ?: emptyList()
+            val maxFps = fpsRanges.maxOfOrNull { range: Range<Int> -> range.upper } ?: 30
 
-            val maxResolution = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val streamMap = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+            val previewMaxResolution = streamMap
                 ?.getOutputSizes(android.graphics.SurfaceTexture::class.java)
                 ?.maxByOrNull { it.width * it.height }
                 ?.let { "${it.width}x${it.height}" }
                 ?: "n/a"
+            val recorderSizes = streamMap?.getOutputSizes(MediaRecorder::class.java)?.toList() ?: emptyList()
+            val supportsUhd = recorderSizes.any { it.width >= 3840 && it.height >= 2160 }
+            val supportsFhd = recorderSizes.any { it.width >= 1920 && it.height >= 1080 }
+            val supportsHd = recorderSizes.any { it.width >= 1280 && it.height >= 720 }
 
             val lensLabel = when (characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.firstOrNull()) {
                 null -> "Cam $cameraId"
@@ -846,7 +1068,11 @@ class MainActivity : AppCompatActivity() {
                     maxZoomRatio = maxZoomRatio,
                     zoomRangeText = zoomText,
                     maxFps = maxFps,
-                    maxResolution = maxResolution
+                    maxResolution = previewMaxResolution,
+                    fpsRanges = fpsRanges,
+                    supportsUhd = supportsUhd,
+                    supportsFhd = supportsFhd,
+                    supportsHd = supportsHd
                 )
             )
         }
@@ -859,13 +1085,36 @@ class MainActivity : AppCompatActivity() {
             it.setSurfaceProvider(binding.previewView.surfaceProvider)
         }
 
+        val currentCapability = selectedCameraCapability
+        val supportedQualityNames = supportedQualityOptions(currentCapability)
+        val preferredQuality = if (selectedVideoQuality in supportedQualityNames) {
+            selectedVideoQuality
+        } else {
+            supportedQualityNames.firstOrNull() ?: "1080"
+        }
+        val orderedQualityNames = listOf(preferredQuality) + supportedQualityNames.filterNot { it == preferredQuality }
         val qualitySelector = QualitySelector.fromOrderedList(
-            listOf(Quality.FHD, Quality.HD, Quality.SD)
+            orderedQualityNames.map { qualityToCameraX(it) }
         )
 
-        val recorder = Recorder.Builder()
+        val targetVideoBitrate = targetVideoBitrateForFps(selectedVideoFps)
+        val recorderBuilder = Recorder.Builder()
             .setQualitySelector(qualitySelector)
-            .build()
+
+        runCatching {
+            val method = recorderBuilder.javaClass.getMethod("setTargetVideoEncodingBitRate", Int::class.javaPrimitiveType)
+            method.invoke(recorderBuilder, targetVideoBitrate)
+        }
+        runCatching {
+            val method = recorderBuilder.javaClass.getMethod("setTargetAudioEncodingBitRate", Int::class.javaPrimitiveType)
+            method.invoke(recorderBuilder, instagramAudioBitrate)
+        }
+        runCatching {
+            val method = recorderBuilder.javaClass.getMethod("setTargetAudioSampleRate", Int::class.javaPrimitiveType)
+            method.invoke(recorderBuilder, instagramAudioSampleRate)
+        }
+
+        val recorder = recorderBuilder.build()
 
         videoCapture = VideoCapture.withOutput(recorder)
 
@@ -885,14 +1134,29 @@ class MainActivity : AppCompatActivity() {
         try {
             provider.unbindAll()
             boundCamera = provider.bindToLifecycle(this, selector, preview, videoCapture)
-            val currentCapability = selectedCameraCapability
             if (currentCapability != null) {
                 val currentZoom = availableZoomRatios.getOrNull(binding.zoomOptionsSpinner.selectedItemPosition) ?: 1f
                 val targetZoom = currentZoom.coerceIn(currentCapability.minZoomRatio, currentCapability.maxZoomRatio)
                 boundCamera?.cameraControl?.setZoomRatio(targetZoom)
             }
+
+            val fpsOptions = supportedFpsOptions(currentCapability)
+            val requestedFps = if (selectedVideoFps in fpsOptions) selectedVideoFps else fpsOptions.firstOrNull() ?: 30
+            selectedVideoFps = requestedFps
+            currentCapability?.fpsRanges
+                ?.filter { it.upper >= requestedFps }
+                ?.maxWithOrNull(compareBy<Range<Int>> { it.lower }.thenBy { it.upper })
+                ?.let { fpsRange ->
+                    Camera2CameraControl.from(boundCamera?.cameraControl ?: return@let)
+                        .setCaptureRequestOptions(
+                            CaptureRequestOptions.Builder()
+                                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
+                                .build()
+                        )
+                }
+
             val cameraDescription = selectedCameraCapability?.displayLabel() ?: "traseira padrão"
-            status("Status: câmera pronta ($cameraDescription)")
+            status("Status: câmera pronta ($cameraDescription) • ${qualityOptionLabel(preferredQuality)} • ${requestedFps}FPS • ${targetVideoBitrate / 1_000_000}Mbps")
         } catch (exc: Exception) {
             boundCamera = null
             ErrorFileLogger.logError(this, "START_CAMERA", exc)
@@ -1097,10 +1361,49 @@ class MainActivity : AppCompatActivity() {
         }
 
         toast("Gravação completa salva")
+        inspectSavedVideoQuality(savedUri, selectedVideoFps)?.let { report ->
+            appendDiagnosticLog("Recording quality check: ${report.summary()}")
+            if (report.issues.isNotEmpty()) {
+                toast("Gravação salva com alertas de qualidade")
+            }
+        }
         maybeUploadVideoToDrive(savedUri, outputName)
     }
 
-    private fun saveReplayBundle() {
+    private fun showReplayTypeDialog() {
+        var selectedTypeIndex = -1
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("Selecione o tipo do replay")
+            .setSingleChoiceItems(replayTypeOptions, selectedTypeIndex) { _, which ->
+                selectedTypeIndex = which
+            }
+            .setPositiveButton("Salvar", null)
+            .create()
+
+        dialog.setOnShowListener {
+            val saveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+            saveButton.isEnabled = false
+
+            val listView = dialog.listView
+            listView.setOnItemClickListener { _, _, position, _ ->
+                selectedTypeIndex = position
+                saveButton.isEnabled = true
+            }
+
+            saveButton.setOnClickListener {
+                if (selectedTypeIndex < 0) return@setOnClickListener
+                val replayType = replayTypeOptions[selectedTypeIndex]
+                dialog.dismiss()
+                saveReplayBundle(replayType)
+            }
+        }
+
+        dialog.setCancelable(false)
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.show()
+    }
+
+    private fun saveReplayBundle(replayType: String) {
         lifecycleScope.launch {
             binding.replayButton.isEnabled = false
 
@@ -1127,7 +1430,7 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                val outputName = "replay_${stamp}.mp4"
+                val outputName = "replay_${replayType.lowercase()}_${stamp}.mp4"
                 val savedUri = withContext(Dispatchers.IO) {
                     saveVideoToPublicGallery(mergedReplay, outputName)
                 }
@@ -1139,8 +1442,14 @@ class MainActivity : AppCompatActivity() {
                     return@launch
                 }
 
-                status("Status: replay salvo na galeria")
-                toast("Replay salvo")
+                status("Status: replay ${replayType.lowercase()} salvo na galeria")
+                toast("Replay $replayType salvo")
+                inspectSavedVideoQuality(savedUri, selectedVideoFps)?.let { report ->
+                    appendDiagnosticLog("Replay quality check: ${report.summary()}")
+                    if (report.issues.isNotEmpty()) {
+                        toast("Replay salvo com alertas de qualidade")
+                    }
+                }
                 maybeUploadVideoToDrive(savedUri, outputName)
             } finally {
                 binding.replayButton.isEnabled = isContinuousRecording
