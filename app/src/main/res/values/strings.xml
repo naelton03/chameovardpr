@@ -36,4 +36,9 @@
     <string name="drive_unlink_account">Desvincular conta</string>
     <string name="auto_upload_flag">Realizar uploads automáticos?</string>
     <string name="app_brand">ReplayOn</string>
+    <string name="menu_config_quality">Qualidade</string>
+    <string name="quality_resolution_title">Resolução</string>
+    <string name="quality_fps_title">Taxa de quadros</string>
+    <string name="quality_updated">Qualidade atualizada: %1$s • %2$dFPS</string>
+    <string name="save">Salvar</string>
 </resources>
