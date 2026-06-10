@@ -1,0 +1,28 @@
+{
+  "expo": {
+    "name": "ReplayCam",
+    "slug": "replaycam-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0B1220"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.example.replaycam"
+    },
+    "android": {
+      "package": "com.example.replaycam",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO"
+      ]
+    },
+    "scheme": "replaycam"
+  }
+}

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/menu_config_auto_upload"
+        android:title="@string/menu_config_auto_upload" />
+    <item
+        android:id="@+id/menu_config_replay_duration"
+        android:title="@string/menu_config_replay_duration" />
+    <item
+        android:id="@+id/menu_config_quality"
+        android:title="@string/menu_config_quality" />
+</menu>

@@ -19,8 +19,47 @@ extensions.configure<ApplicationExtension>("android") {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+
+    signingConfigs {
+        val propertyKeystorePath = providers.gradleProperty("REPLAYCAM_KEYSTORE_PATH")
+            .orElse(providers.environmentVariable("REPLAYCAM_KEYSTORE_PATH"))
+            .orNull
+        val localStableKeystore = rootProject.file(".keystore/replaycam-oauth.jks")
+        val resolvedKeystorePath = when {
+            !propertyKeystorePath.isNullOrBlank() -> propertyKeystorePath
+            localStableKeystore.exists() -> localStableKeystore.absolutePath
+            else -> null
+        }
+
+        val keyAlias = providers.gradleProperty("REPLAYCAM_KEY_ALIAS")
+            .orElse(providers.environmentVariable("REPLAYCAM_KEY_ALIAS"))
+            .orElse("replaycamoauth")
+            .orNull
+        val storePassword = providers.gradleProperty("REPLAYCAM_STORE_PASSWORD")
+            .orElse(providers.environmentVariable("REPLAYCAM_STORE_PASSWORD"))
+            .orElse("replaycam123")
+            .orNull
+        val keyPassword = providers.gradleProperty("REPLAYCAM_KEY_PASSWORD")
+            .orElse(providers.environmentVariable("REPLAYCAM_KEY_PASSWORD"))
+            .orElse("replaycam123")
+            .orNull
+
+        if (!resolvedKeystorePath.isNullOrBlank() && !keyAlias.isNullOrBlank() && !storePassword.isNullOrBlank() && !keyPassword.isNullOrBlank()) {
+            create("stableOAuth") {
+                storeFile = file(resolvedKeystorePath)
+                this.keyAlias = keyAlias
+                this.storePassword = storePassword
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.findByName("stableOAuth") ?: signingConfigs.getByName("debug")
+        }
         getByName("release") {
+            signingConfig = signingConfigs.findByName("stableOAuth") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -36,6 +75,13 @@ extensions.configure<ApplicationExtension>("android") {
 
     buildFeatures {
         viewBinding = true
+    }
+
+    packaging {
+        resources {
+            excludes += "META-INF/INDEX.LIST"
+            excludes += "META-INF/DEPENDENCIES"
+        }
     }
 }
 
@@ -58,4 +104,13 @@ dependencies {
     add("implementation", "androidx.camera:camera-lifecycle:$cameraxVersion")
     add("implementation", "androidx.camera:camera-video:$cameraxVersion")
     add("implementation", "androidx.camera:camera-view:$cameraxVersion")
+
+    add("implementation", "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    add("implementation", "com.google.android.gms:play-services-auth:21.2.0")
+    add("implementation", "com.google.api-client:google-api-client-android:2.6.0")
+    add("implementation", "com.google.apis:google-api-services-youtube:v3-rev20240814-2.0.0")
+    add("implementation", "com.google.apis:google-api-services-drive:v3-rev20220815-2.0.0")
+    add("implementation", "com.github.pedroSG94.RootEncoder:rtmp:2.4.8")
+    add("implementation", "com.github.pedroSG94.RootEncoder:library:2.4.8")
+    add("implementation", "com.github.pedroSG94.RootEncoder:encoder:2.4.8")
 }
